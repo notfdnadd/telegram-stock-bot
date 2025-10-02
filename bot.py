@@ -5,9 +5,12 @@ import mplfinance as mpf
 import pandas as pd
 import io
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import logging
+import requests
+from bs4 import BeautifulSoup
+import time
 
 # Configure logging
 logging.basicConfig(
@@ -17,7 +20,77 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# ==== Helper Functions ====
+# ==== DATA SOURCE ALTERNATIVES ====
+def get_indonesia_stock_data(symbol, period="6mo"):
+    """
+    Mendapatkan data saham Indonesia dari berbagai sumber
+    """
+    # Coba yfinance dulu
+    try:
+        yf_symbol = symbol + ".JK"
+        data = yf.download(yf_symbol, period=period, interval="1d", progress=False)
+        if len(data) > 0:
+            logger.info(f"Data found via yfinance for {symbol}")
+            return data
+    except Exception as e:
+        logger.warning(f"yfinance failed for {symbol}: {e}")
+    
+    # Fallback: Gunakan data dummy/simulasi untuk testing
+    logger.info(f"Using simulated data for {symbol}")
+    return create_sample_data(symbol)
+
+def create_sample_data(symbol):
+    """
+    Membuat data sample untuk testing ketika data real tidak tersedia
+    """
+    dates = pd.date_range(end=datetime.now(), periods=180, freq='D')
+    
+    # Harga dasar berdasarkan simbol
+    base_price = {
+        'BBCA': 9500, 'BBRI': 4500, 'BMRI': 8500, 'BBNI': 9500,
+        'TLKM': 3500, 'ASII': 5200, 'UNVR': 3800, 'ICBP': 9500,
+        'GOTO': 80, 'BRIS': 1500, 'ANTM': 1500, 'ADRO': 2000,
+        'BBHI': 1200, 'BUKA': 150, 'EMTK': 500, 'ARTO': 3000
+    }
+    
+    base = base_price.get(symbol, 1000)
+    
+    np.random.seed(hash(symbol) % 10000)
+    returns = np.random.normal(0.001, 0.02, len(dates))
+    prices = base * (1 + np.cumsum(returns))
+    
+    data = pd.DataFrame({
+        'Open': prices * 0.99,
+        'High': prices * 1.02,
+        'Low': prices * 0.98,
+        'Close': prices,
+        'Volume': np.random.randint(1000000, 50000000, len(dates))
+    }, index=dates)
+    
+    return data
+
+def get_current_price_fallback(symbol):
+    """
+    Fallback untuk mendapatkan harga current
+    """
+    try:
+        # Coba dari yfinance
+        ticker = yf.Ticker(symbol + ".JK")
+        data = ticker.history(period='1d', interval='1m', progress=False)
+        if len(data) > 0:
+            return data['Close'].iloc[-1]
+    except:
+        pass
+    
+    # Fallback ke harga simulasi
+    base_price = {
+        'BBCA': 9500, 'BBRI': 4500, 'BMRI': 8500, 'BBNI': 9500,
+        'TLKM': 3500, 'ASII': 5200, 'UNVR': 3800, 'ICBP': 9500,
+        'GOTO': 80, 'BRIS': 1500, 'ANTM': 1500, 'ADRO': 2000
+    }
+    return base_price.get(symbol, 1000)
+
+# ==== UPDATED HELPER FUNCTIONS ====
 def safe_last(series):
     """Ambil nilai terakhir dari Series atau DataFrame dengan aman"""
     if series is None or len(series) == 0:
@@ -25,7 +98,6 @@ def safe_last(series):
 
     val = series.iloc[-1]
 
-    # kalau ternyata masih Series (multi kolom), ambil Close/Volume dulu
     if isinstance(val, pd.Series):
         val = val.iloc[0]
 
@@ -37,57 +109,12 @@ def safe_last(series):
     return val if pd.notna(val) else None
 
 def get_current_price(symbol):
-    """Mendapatkan harga real-time"""
-    try:
-        ticker = yf.Ticker(symbol)
-        data = ticker.history(period='1d', interval='1m')
-        if len(data) > 0:
-            return data['Close'].iloc[-1]
-        else:
-            # Fallback ke data harian
-            data = ticker.history(period='1d')
-            return data['Close'].iloc[-1] if len(data) > 0 else None
-    except Exception:
-        return None
-
-
-def fetch_history(symbol, period="1y", interval="1d", auto_adjust=False, max_retries=2):
-    """Robust wrapper to fetch historical data from yfinance with fallbacks.
-
-    Tries multiple strategies because sometimes yf.download returns empty in containerized
-    environments or Yahoo responds with no-data for a specific query.
-    """
-    try:
-        # First attempt: yf.download (fast)
-        df = yf.download(symbol, period=period, interval=interval, auto_adjust=auto_adjust)
-        if isinstance(df, pd.DataFrame) and len(df) > 0:
-            return df
-
-        # Second attempt: Ticker.history with same params
-        ticker = yf.Ticker(symbol)
-        df = ticker.history(period=period, interval=interval, auto_adjust=auto_adjust)
-        if isinstance(df, pd.DataFrame) and len(df) > 0:
-            return df
-
-        # Third attempt: explicit start/end window (derive days from period)
-        today = datetime.now().date()
-        days_map = {"1y": 365, "6mo": 182, "3mo": 90, "90d": 90}
-        days = days_map.get(period, 365)
-        start = today - pd.Timedelta(days=days)
-        df = ticker.history(start=start.strftime("%Y-%m-%d"), end=today.strftime("%Y-%m-%d"), interval=interval, auto_adjust=auto_adjust)
-        if isinstance(df, pd.DataFrame) and len(df) > 0:
-            return df
-
-        # Fourth attempt: try yf.download with threads disabled (some envs prefer it)
-        df = yf.download(symbol, period=period, interval=interval, auto_adjust=auto_adjust, threads=False)
-        if isinstance(df, pd.DataFrame) and len(df) > 0:
-            return df
-
-        # If still empty, return empty DataFrame
-        return pd.DataFrame()
-    except Exception as e:
-        logger.warning(f"fetch_history fallback failed for {symbol}: {e}")
-        return pd.DataFrame()
+    """Mendapatkan harga real-time dengan fallback"""
+    price = get_current_price_fallback(symbol)
+    if price is None:
+        # Final fallback
+        return 1000
+    return price
 
 def calculate_rsi(data, period=14):
     """Menghitung RSI"""
@@ -102,23 +129,167 @@ def find_support_resistance(data, current_price, lookback_days=60):
     """Mencari level support dan resistance yang realistis"""
     recent_data = data.tail(lookback_days)
     
-    # Support: cari level di BAWAH harga saat ini
     price_below = recent_data[recent_data['Low'] < current_price]['Low']
     if len(price_below) > 0:
-        support = float(price_below.max())  # Convert ke float
+        support = float(price_below.max())
     else:
         support = float(recent_data['Low'].min())
     
-    # Resistance: cari level di ATAS harga saat ini  
     price_above = recent_data[recent_data['High'] > current_price]['High']
     if len(price_above) > 0:
-        resistance = float(price_above.min())  # Convert ke float
+        resistance = float(price_above.min())
     else:
         resistance = float(recent_data['High'].max())
     
     return support, resistance
 
-# ==== START ====
+# ==== IMPROVED ENTRY POINT CALCULATION FOR STOCKS ====
+def calculate_entry_points(current_price, support, resistance, trend_type):
+    """Menghitung entry point untuk saham Indonesia (LONG ONLY)"""
+    valid_current = current_price if current_price and not pd.isna(current_price) else 1000
+    valid_support = support if support and not pd.isna(support) else valid_current * 0.95
+    valid_resistance = resistance if resistance and not pd.isna(resistance) else valid_current * 1.05
+    
+    entry_points = {}
+    
+    if trend_type == "bullish":
+        # BULLISH: Entry di pullback ke support atau breakout
+        entry_points['conservative'] = valid_support * 1.01  # Sedikit di atas support
+        entry_points['aggressive'] = valid_current * 0.995   # Harga saat ini
+        entry_points['breakout'] = valid_resistance * 1.005  # Setelah breakout resistance
+        entry_points['recommended'] = entry_points['conservative']  # Paling aman
+        
+    elif trend_type == "bearish":
+        # BEARISH: HINDARI atau entry sangat konservatif
+        entry_points['avoid'] = "HINDARI - Trend Bearish"
+        entry_points['conservative'] = valid_support * 1.02  # Hanya jika bounce dari support
+        entry_points['wait'] = "TUNGGU reversal pattern"
+        entry_points['recommended'] = entry_points['conservative']
+        
+    else:  # sideways
+        # SIDEWAYS: Buy di support area
+        entry_points['buy_support'] = valid_support * 1.01
+        entry_points['current_price'] = valid_current
+        entry_points['breakout'] = valid_resistance * 1.005
+        entry_points['recommended'] = entry_points['buy_support']
+    
+    # Validasi: pastikan entry points reasonable
+    for key, value in entry_points.items():
+        if isinstance(value, (int, float)) and (pd.isna(value) or value <= 0):
+            entry_points[key] = valid_current
+    
+    return entry_points
+
+# ==== IMPROVED TARGET CALCULATION FOR STOCKS (LONG ONLY) ====
+def calculate_targets_stoploss(current_price, support, resistance, trend_type, entry_points):
+    """Menghitung target dan stop loss untuk saham Indonesia (LONG ONLY)"""
+    valid_current = current_price if current_price and not pd.isna(current_price) else 1000
+    valid_support = support if support and not pd.isna(support) else valid_current * 0.95
+    valid_resistance = resistance if resistance and not pd.isna(resistance) else valid_current * 1.05
+    
+    # Untuk saham Indonesia, kita hanya consider LONG positions
+    # TP1 dan TP2 harus selalu > entry price
+    # Stop loss harus < entry price
+    
+    if trend_type == "bullish":
+        # BULLISH: Multiple target di atas
+        tp1 = valid_resistance
+        tp2 = valid_resistance * 1.05  # Target lebih tinggi
+        stop_loss = valid_support * 0.98  # Stop di bawah support
+        
+        # Pastikan TP1 > current_price dan TP2 > TP1
+        if tp1 <= current_price:
+            tp1 = current_price * 1.03
+        if tp2 <= tp1:
+            tp2 = tp1 * 1.03
+            
+    elif trend_type == "bearish":
+        # BEARISH: Hindari entry atau target konservatif
+        # Untuk bearish, kita tunggu di support atau hindari
+        tp1 = valid_current * 1.02  # Target sangat konservatif
+        tp2 = valid_current * 1.05  # Target kecil
+        stop_loss = valid_current * 0.95  # Stop ketat
+        
+    else:  # sideways
+        # SIDEWAYS: Buy di support, target di resistance
+        tp1 = valid_resistance * 0.98  # Target di bawah resistance
+        tp2 = valid_resistance * 1.02  # Target breakout
+        stop_loss = valid_support * 0.98  # Stop di bawah support
+        
+        # Pastikan target > current price untuk sideways
+        if tp1 <= current_price:
+            tp1 = current_price * 1.02
+        if tp2 <= tp1:
+            tp2 = tp1 * 1.02
+    
+    # Validasi akhir: pastikan selalu TP2 > TP1 > Entry > Stop Loss
+    recommended_entry = entry_points.get('recommended', valid_current)
+    
+    if isinstance(recommended_entry, (int, float)):
+        if tp1 <= recommended_entry:
+            tp1 = recommended_entry * 1.03
+        if tp2 <= tp1:
+            tp2 = tp1 * 1.03
+        if stop_loss >= recommended_entry:
+            stop_loss = recommended_entry * 0.97
+    
+    return float(tp1), float(tp2), float(stop_loss)
+
+# ==== IMPROVED SUPPORT/RESISTANCE CALCULATION =====
+def find_improved_support_resistance(data, current_price, ma20, ma50, ma200, lookback_days=60):
+    """Mencari level support dan resistance yang lebih akurat"""
+    recent_data = data.tail(lookback_days)
+    
+    # Method 1: Recent significant highs and lows
+    recent_high = float(recent_data['High'].max())
+    recent_low = float(recent_data['Low'].min())
+    
+    # Method 2: Psychological levels (round numbers)
+    base_level = round(current_price / 100) * 100
+    psychological_levels = [base_level + i * 100 for i in range(-5, 6)]
+    
+    # Method 3: Moving averages as dynamic levels
+    ma_levels = []
+    if ma20 is not None: 
+        ma20_val = float(ma20) if not isinstance(ma20, pd.Series) else float(ma20.iloc[0])
+        ma_levels.append(ma20_val)
+    if ma50 is not None: 
+        ma50_val = float(ma50) if not isinstance(ma50, pd.Series) else float(ma50.iloc[0])
+        ma_levels.append(ma50_val)
+    if ma200 is not None: 
+        ma200_val = float(ma200) if not isinstance(ma200, pd.Series) else float(ma200.iloc[0])
+        ma_levels.append(ma200_val)
+    
+    # Combine all levels
+    all_levels = psychological_levels + ma_levels + [recent_high, recent_low]
+    
+    # Filter support (below current price) and resistance (above current price)
+    support_candidates = [level for level in all_levels if level < current_price * 0.99]
+    resistance_candidates = [level for level in all_levels if level > current_price * 1.01]
+    
+    # Ambil support tertinggi dan resistance terendah
+    support = max(support_candidates) if support_candidates else recent_low
+    resistance = min(resistance_candidates) if resistance_candidates else recent_high
+    
+    # Pastikan ada jarak minimal 2% dari current price
+    min_distance = current_price * 0.02
+    if current_price - support < min_distance:
+        support = max(support, current_price - min_distance)
+    if resistance - current_price < min_distance:
+        resistance = min(resistance, current_price + min_distance)
+    
+    # Pastikan support < resistance
+    if support >= resistance:
+        if current_price > recent_high * 0.8:  # Jika harga cukup tinggi
+            resistance = current_price * 1.05
+            support = current_price * 0.95
+        else:
+            support = current_price * 0.95
+            resistance = current_price * 1.05
+    
+    return float(support), float(resistance)
+
+# ==== COMMAND FUNCTIONS ====
 def start(update, context):
     update.message.reply_text(
         "Halo! Saya bot trading saham Indonesia.\n\n"
@@ -126,7 +297,6 @@ def start(update, context):
         "Ketik /menu untuk melihat fitur yang tersedia."
     )
 
-# ==== MENU ====
 def menu(update, context):
     text = (
         "📌 Menu Bot Trading Saham:\n\n"
@@ -139,19 +309,18 @@ def menu(update, context):
     )
     update.message.reply_text(text)
 
-# ==== MA ====
 def ma(update, context):
     if len(context.args) != 1:
         update.message.reply_text("❌ Format salah. Contoh: /ma BBCA")
         return
 
     kode = context.args[0].upper()
-    symbol = kode + ".JK"
     
     try:
-        # Get data (robust)
-        data = fetch_history(symbol, period="1y", interval="1d", auto_adjust=False)
-        if data is None or len(data) == 0:
+        # Gunakan data source alternatif
+        data = get_indonesia_stock_data(kode, period="1y")
+        
+        if len(data) == 0:
             update.message.reply_text(f"❌ Tidak menemukan data untuk {kode}")
             return
 
@@ -162,8 +331,8 @@ def ma(update, context):
         data['MA100'] = data['Close'].rolling(100).mean()
         data['MA200'] = data['Close'].rolling(200).mean()
 
-        # Get current price (real-time)
-        current_price = get_current_price(symbol)
+        # Get current price
+        current_price = get_current_price(kode)
         if current_price is None:
             current_price = safe_last(data['Close'])
 
@@ -212,25 +381,25 @@ def ma(update, context):
             f"📊 MOVING AVERAGE {kode}\n"
             f"💰 Harga Saat Ini: {harga_text}\n\n"
             f"{ma_text}\n"
-            f"📈 Trend: {trend}"
+            f"📈 Trend: {trend}\n\n"
+            f"💡 Catatan: Menggunakan data simulasi untuk demo"
         )
         update.message.reply_text(pesan)
 
     except Exception as e:
+        logger.error(f"Error in /ma: {e}")
         update.message.reply_text(f"❌ Error: {str(e)}")
 
-# ==== ALERT ====
 def alert(update, context):
     if len(context.args) != 1:
         update.message.reply_text("❌ Format salah. Contoh: /alert BBCA")
         return
 
     kode = context.args[0].upper()
-    symbol = kode + ".JK"
     
     try:
-        data = fetch_history(symbol, period="3mo", interval="1d", auto_adjust=False)
-        if data is None or len(data) == 0:
+        data = get_indonesia_stock_data(kode, period="3mo")
+        if len(data) == 0:
             update.message.reply_text(f"❌ Tidak menemukan data untuk {kode}")
             return
 
@@ -240,7 +409,7 @@ def alert(update, context):
         data['RSI'] = calculate_rsi(data)
 
         # Get current values
-        current_price = get_current_price(symbol) or safe_last(data['Close'])
+        current_price = get_current_price(kode) or safe_last(data['Close'])
         volume = safe_last(data['Volume'])
         ma20 = safe_last(data['MA20'])
         vol20 = safe_last(data['Vol20'])
@@ -306,12 +475,14 @@ def alert(update, context):
         else:
             pesan += "\n🎯 Sinyal: SIDEWAYS / NETRAL"
 
+        pesan += "\n\n💡 Catatan: Menggunakan data simulasi untuk demo"
+
         update.message.reply_text(pesan)
 
     except Exception as e:
+        logger.error(f"Error in /alert: {e}")
         update.message.reply_text(f"❌ Error: {str(e)}")
 
-# === CHART ===
 def chart(update, context):
     try:
         if len(context.args) != 1:
@@ -319,11 +490,11 @@ def chart(update, context):
             return
 
         kode = context.args[0].upper()
-        symbol = kode + ".JK"
         
-        # Download data (robust)
-        data = fetch_history(symbol, period="6mo", interval="1d", auto_adjust=True)
-        if data is None or len(data) == 0:
+        # Download data dengan source alternatif
+        data = get_indonesia_stock_data(kode, period="6mo")
+        
+        if len(data) == 0:
             update.message.reply_text(f"❌ Tidak menemukan data untuk {kode}")
             return
 
@@ -355,60 +526,8 @@ def chart(update, context):
         histogram = macd - signal
 
         # Get current price untuk menentukan support/resistance
-        current_price = get_current_price(symbol) or safe_last(data['Close'])
+        current_price = get_current_price(kode) or safe_last(data['Close'])
         
-        # ===== IMPROVED SUPPORT/RESISTANCE UNTUK CHART =====
-        def find_chart_support_resistance(data, current_price, lookback_days=60):
-            """Mencari level support dan resistance yang optimal untuk chart"""
-            recent_data = data.tail(lookback_days)
-            
-            # Method 1: Recent significant highs and lows
-            recent_high = float(recent_data['High'].max())
-            recent_low = float(recent_data['Low'].min())
-            
-            # Method 2: Psychological levels (round numbers)
-            base_level = round(current_price / 100) * 100
-            psychological_levels = [base_level + i * 100 for i in range(-5, 6)]
-            
-            # Method 3: Moving averages as dynamic levels
-            ma9_val = safe_last(data["MA9"])
-            ma20_val = safe_last(data["MA20"]) 
-            ma50_val = safe_last(data["MA50"])
-            
-            ma_levels = []
-            if ma9_val: ma_levels.append(float(ma9_val))
-            if ma20_val: ma_levels.append(float(ma20_val))
-            if ma50_val: ma_levels.append(float(ma50_val))
-            
-            # Combine all levels
-            all_levels = psychological_levels + ma_levels + [recent_high, recent_low]
-            
-            # Filter dan pilih yang paling signifikan
-            support_candidates = [level for level in all_levels if level < current_price * 0.99]
-            resistance_candidates = [level for level in all_levels if level > current_price * 1.01]
-            
-            # Ambil 2 support terkuat (tertinggi) dan 2 resistance terkuat (terendah)
-            support_levels = sorted(support_candidates, reverse=True)[:2] if support_candidates else [recent_low]
-            resistance_levels = sorted(resistance_candidates)[:2] if resistance_candidates else [recent_high]
-            
-            # Pastikan ada jarak minimal 2% antara level
-            min_gap = current_price * 0.02
-            filtered_support = []
-            filtered_resistance = []
-            
-            for level in support_levels:
-                if not filtered_support or (filtered_support[-1] - level) >= min_gap:
-                    filtered_support.append(level)
-            
-            for level in resistance_levels:
-                if not filtered_resistance or (level - filtered_resistance[-1]) >= min_gap:
-                    filtered_resistance.append(level)
-            
-            return filtered_support, filtered_resistance
-
-        # Gunakan improved support resistance untuk chart
-        support_levels, resistance_levels = find_chart_support_resistance(data, current_price, 60)
-
         # Create subplots
         apds = [
             mpf.make_addplot(data["MA9"], color='orange', width=0.7, label='MA9'),
@@ -439,34 +558,6 @@ def chart(update, context):
         ax_rsi = axlist[2]
         ax_macd = axlist[3]
 
-        # Plot support levels dengan warna dan annotation yang berbeda
-        colors_support = ['green', 'lime']
-        for i, s in enumerate(support_levels):
-            if s < current_price:  # Pastikan support di bawah harga
-                color = colors_support[i] if i < len(colors_support) else 'green'
-                ax_main.axhline(s, color=color, linestyle='--', linewidth=2, alpha=0.8)
-                ax_main.annotate(
-                    f"S{i+1}: {s:.0f}", xy=(0.02, s),
-                    xycoords=("axes fraction", "data"),
-                    xytext=(0, 5), textcoords="offset points",
-                    ha="left", va="bottom", color=color, fontsize=9,
-                    bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor=color, alpha=0.8)
-                )
-
-        # Plot resistance levels dengan warna dan annotation yang berbeda
-        colors_resistance = ['red', 'orange']
-        for i, r in enumerate(resistance_levels):
-            if r > current_price:  # Pastikan resistance di atas harga
-                color = colors_resistance[i] if i < len(colors_resistance) else 'red'
-                ax_main.axhline(r, color=color, linestyle='--', linewidth=2, alpha=0.8)
-                ax_main.annotate(
-                    f"R{i+1}: {r:.0f}", xy=(0.02, r),
-                    xycoords=("axes fraction", "data"),
-                    xytext=(0, 5), textcoords="offset points",
-                    ha="left", va="bottom", color=color, fontsize=9,
-                    bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor=color, alpha=0.8)
-                )
-
         ax_main.set_title(f'Chart {kode} - {datetime.now().strftime("%Y-%m-%d")}', fontsize=14, fontweight='bold')
         ax_main.legend()
         
@@ -485,180 +576,25 @@ def chart(update, context):
         
         update.message.reply_photo(
             photo=buf, 
-            caption=f"📊 Chart {kode}\n💰 Harga: {price_text}\n📈 Periode: 6 Bulan\n\nCandle + MA + RSI + MACD\nS: Support | R: Resistance"
+            caption=f"📊 Chart {kode}\n💰 Harga: {price_text}\n📈 Periode: 6 Bulan\n\nCandle + MA + RSI + MACD\n💡 Data Simulasi"
         )
         plt.close(fig)
 
     except Exception as e:
+        logger.error(f"Error in /chart: {e}")
         update.message.reply_text(f"❌ Error membuat chart: {str(e)}")
 
-# ==== IMPROVED ENTRY POINT CALCULATION =====
-def calculate_entry_points(current_price, support, resistance, trend_type):
-    """Menghitung entry point yang logis sesuai trend"""
-    # Validasi input
-    valid_current = current_price if current_price and not pd.isna(current_price) else 1000
-    valid_support = support if support and not pd.isna(support) else valid_current * 0.95
-    valid_resistance = resistance if resistance and not pd.isna(resistance) else valid_current * 1.05
-    
-    entry_points = {}
-    
-    if trend_type == "bullish":
-        # BULLISH: Conservative di atas support, Aggressive di current/breakout
-        entry_points['conservative'] = valid_support * 1.02  # Sedikit di atas support
-        entry_points['aggressive'] = min(valid_current * 0.995, valid_resistance * 0.98)  # Harga saat ini atau sedikit di bawah resistance
-        entry_points['breakout'] = valid_resistance * 1.01   # Setelah breakout
-        entry_points['recommended'] = entry_points['conservative']
-        
-        # Pastikan urutan logis: conservative < aggressive < breakout
-        if entry_points['aggressive'] < entry_points['conservative']:
-            entry_points['aggressive'] = entry_points['conservative'] * 1.01
-            
-    elif trend_type == "bearish":
-        # BEARISH: Conservative di bawah resistance, Aggressive di current/breakdown
-        entry_points['conservative'] = valid_resistance * 0.98  # Sedikit di bawah resistance
-        entry_points['aggressive'] = max(valid_current * 1.005, valid_support * 1.02)  # Harga saat ini atau sedikit di atas support
-        entry_points['breakdown'] = valid_support * 0.99       # Setelah breakdown
-        entry_points['recommended'] = entry_points['conservative']
-        
-        # Pastikan urutan logis: conservative > aggressive > breakdown
-        if entry_points['aggressive'] > entry_points['conservative']:
-            entry_points['aggressive'] = entry_points['conservative'] * 0.99
-            
-    else:  # sideways
-        # SIDEWAYS: Buy di support, sell di resistance
-        entry_points['buy_near_support'] = valid_support * 1.02
-        entry_points['sell_near_resistance'] = valid_resistance * 0.98
-        entry_points['recommended'] = entry_points['buy_near_support']
-    
-    # Validasi final: pastikan tidak ada NaN dan nilai reasonable
-    for key, value in entry_points.items():
-        if pd.isna(value) or value <= 0:
-            entry_points[key] = valid_current
-    
-    return entry_points
-
-# ==== IMPROVED TARGET CALCULATION =====
-def calculate_targets_stoploss(current_price, support, resistance, trend_type, entry_points):
-    """Menghitung target dan stop loss yang logis sesuai trend"""
-    valid_current = current_price if current_price and not pd.isna(current_price) else 1000
-    valid_support = support if support and not pd.isna(support) else valid_current * 0.95
-    valid_resistance = resistance if resistance and not pd.isna(resistance) else valid_current * 1.05
-    
-    price_range = valid_resistance - valid_support
-    
-    if trend_type == "bullish":
-        # BULLISH: TP1 di resistance, TP2 di atas resistance
-        tp1 = valid_resistance
-        tp2 = valid_resistance + price_range * 0.5  # 50% dari range di atas resistance
-        
-        # Stop loss di bawah support
-        stop_loss = valid_support * 0.98
-        
-        # Pastikan TP2 > TP1 untuk bullish
-        if tp2 <= tp1:
-            tp2 = tp1 * 1.05
-            
-    elif trend_type == "bearish":
-        # BEARISH: TP1 di support, TP2 di bawah support  
-        tp1 = valid_support
-        tp2 = valid_support - price_range * 0.5  # 50% dari range di bawah support
-        
-        # Stop loss di atas resistance
-        stop_loss = valid_resistance * 1.02
-        
-        # Pastikan TP2 < TP1 untuk bearish
-        if tp2 >= tp1:
-            tp2 = tp1 * 0.95
-            
-    else:  # sideways
-        # SIDEWAYS: TP buy di resistance, TP sell di support
-        tp1 = valid_resistance
-        tp2 = valid_support
-        
-        # Stop loss berdasarkan posisi entry
-        if 'recommended' in entry_points:
-            recommended_entry = entry_points['recommended']
-            if recommended_entry <= (valid_support + valid_resistance) / 2:
-                stop_loss = valid_support * 0.98  # Untuk posisi buy
-            else:
-                stop_loss = valid_resistance * 1.02  # Untuk posisi sell
-        else:
-            stop_loss = valid_support * 0.98
-    
-    # Validasi akhir
-    if pd.isna(tp1): tp1 = valid_current * (1.03 if trend_type == "bullish" else 0.97)
-    if pd.isna(tp2): tp2 = valid_current * (1.06 if trend_type == "bullish" else 0.94)
-    if pd.isna(stop_loss): stop_loss = valid_current * (0.97 if trend_type == "bullish" else 1.03)
-    
-    return float(tp1), float(tp2), float(stop_loss)
-
-# ==== IMPROVED SUPPORT/RESISTANCE CALCULATION =====
-def find_improved_support_resistance(data, current_price, ma20, ma50, ma200, lookback_days=60):
-    """Mencari level support dan resistance yang lebih akurat"""
-    recent_data = data.tail(lookback_days)
-    
-    # Method 1: Recent significant highs and lows
-    recent_high = float(recent_data['High'].max())
-    recent_low = float(recent_data['Low'].min())
-    
-    # Method 2: Psychological levels (round numbers)
-    base_level = round(current_price / 100) * 100
-    psychological_levels = [base_level + i * 100 for i in range(-5, 6)]
-    
-    # Method 3: Moving averages as dynamic levels
-    ma_levels = []
-    if ma20 is not None: 
-        ma20_val = float(ma20) if not isinstance(ma20, pd.Series) else float(ma20.iloc[0])
-        ma_levels.append(ma20_val)
-    if ma50 is not None: 
-        ma50_val = float(ma50) if not isinstance(ma50, pd.Series) else float(ma50.iloc[0])
-        ma_levels.append(ma50_val)
-    if ma200 is not None: 
-        ma200_val = float(ma200) if not isinstance(ma200, pd.Series) else float(ma200.iloc[0])
-        ma_levels.append(ma200_val)
-    
-    # Combine all levels
-    all_levels = psychological_levels + ma_levels + [recent_high, recent_low]
-    
-    # Filter support (below current price) and resistance (above current price)
-    support_candidates = [level for level in all_levels if level < current_price * 0.99]
-    resistance_candidates = [level for level in all_levels if level > current_price * 1.01]
-    
-    # Ambil support tertinggi dan resistance terendah
-    support = max(support_candidates) if support_candidates else recent_low
-    resistance = min(resistance_candidates) if resistance_candidates else recent_high
-    
-    # Pastikan ada jarak minimal 2% dari current price
-    min_distance = current_price * 0.02
-    if current_price - support < min_distance:
-        support = max(support, current_price - min_distance)
-    if resistance - current_price < min_distance:
-        resistance = min(resistance, current_price + min_distance)
-    
-    # Pastikan support < resistance
-    if support >= resistance:
-        if current_price > recent_high * 0.8:  # Jika harga cukup tinggi
-            resistance = current_price * 1.05
-            support = current_price * 0.95
-        else:
-            support = current_price * 0.95
-            resistance = current_price * 1.05
-    
-    return float(support), float(resistance)
-
-# ==== ANALYSIS ====
 def analysis(update, context):
     if len(context.args) != 1:
         update.message.reply_text("❌ Format salah. Contoh: /analysis BBCA")
         return
 
     kode = context.args[0].upper()
-    symbol = kode + ".JK"
     
     try:
-        # Get data dengan periode lebih panjang untuk MA200 - robust fetch
-        data = fetch_history(symbol, period="1y", interval="1d", auto_adjust=True)
-        if data is None or len(data) == 0:
+        # Get data dengan source alternatif
+        data = get_indonesia_stock_data(kode, period="1y")
+        if len(data) == 0:
             update.message.reply_text(f"❌ Tidak menemukan data untuk {kode}")
             return
 
@@ -678,7 +614,7 @@ def analysis(update, context):
         histogram = macd_line - signal_line
 
         # Get current values dengan safe extraction
-        current_price = get_current_price(symbol) or safe_last(data['Close'])
+        current_price = get_current_price(kode) or safe_last(data['Close'])
         
         # FIXED: Extract values properly dari Series
         def safe_extract(value):
@@ -741,7 +677,6 @@ def analysis(update, context):
                 trend_type = "sideways"
                 trend_explanation = f"MA saling berpotongan, trend SIDEWAYS"
 
-        # [Rest of the code remains the same...]
         # ===== RSI ANALYSIS =====
         rsi_analysis = ""
         rsi_signal = "netral"
@@ -823,53 +758,59 @@ def analysis(update, context):
         # ===== GENERATE RECOMMENDATIONS =====
         recommendations = []
         explanation_parts = []
-        
-        # Trend-based recommendations
+
+        # Trend-based recommendations untuk saham Indonesia
         if trend_type == "bullish" and trend_strength == "kuat":
             recommendations.extend([
                 "✅ BUY: Trend bullish kuat, preferensi beli pada pullback",
-                "🎯 Entry: Di area support atau breakout resistance",
+                "🎯 Entry: Di area support atau breakout resistance", 
                 "📈 Target: Multiple resistance levels",
-                "🛑 Stop Loss: Di bawah support terdekat"
+                "🛑 Stop Loss: Di bawah support terdekat",
+                "💰 Strategy: Buy on dip"
             ])
-            explanation_parts.append("Kondisi ideal untuk trading dengan bias beli (buy on dip)")
+            explanation_parts.append("Kondisi ideal untuk accumulation")
             
         elif trend_type == "bullish":
             recommendations.extend([
                 "🟡 BUY dengan konfirmasi: Trend bullish tapi perlu konfirmasi volume",
-                "🎯 Entry: Tunggu konfirmasi breakout atau bounce dari support", 
-                "📈 Target: Resistance berikutnya",
-                "🛑 Stop Loss: Ketat di bawah support"
+                "🎯 Entry: Tunggu konfirmasi breakout atau bounce dari support",
+                "📈 Target: Resistance berikutnya", 
+                "🛑 Stop Loss: Ketat di bawah support",
+                "💰 Strategy: Wait for confirmation"
             ])
             explanation_parts.append("Bias beli tapi perlu konfirmasi tambahan")
             
         elif trend_type == "bearish" and trend_strength == "kuat":
             recommendations.extend([
-                "🔴 SELL/AVOID: Trend bearish kuat, hindari posisi beli",
-                "🎯 Entry Short: Di rally ke resistance",
-                "📉 Target: Support berikutnya", 
-                "🛑 Stop Loss: Di atas resistance"
+                "🔴 HINDARI: Trend bearish kuat, jangan buka posisi baru",
+                "💡 Action: Jika sudah hold, consider cut loss atau averaging",
+                "🎯 Wait For: Reversal pattern atau bounce dari support kuat",
+                "📉 Risk: High probability of further downside",
+                "💰 Strategy: Stay cash, wait for better entry"
             ])
-            explanation_parts.append("Kondisi risk-on untuk bearish, preferensi jual atau tunggu di pinggir")
+            explanation_parts.append("Kondisi risk tinggi, preferensi hindari")
             
         elif trend_type == "bearish":
             recommendations.extend([
-                "🟡 SELL dengan konfirmasi: Trend bearish tapi waspada oversold",
-                "🎯 Entry: Tunggu konfirmasi breakdown support",
-                "📉 Target: Support kuat berikutnya",
-                "🛑 Stop Loss: Di atas resistance terdekat"
+                "🔴 HINDARI / TUNGGU: Trend bearish, risk tinggi",
+                "💡 Khusus: Hanya untuk trader experienced dengan risk management ketat", 
+                "🎯 Entry: Hanya jika ada bounce dari support kuat dengan volume",
+                "📈 Target: Sangat konservatif (2-3%)",
+                "🛑 Stop Loss: Sangat ketat (3-5%)",
+                "💰 Strategy: Avoid or very small position"
             ])
-            explanation_parts.append("Bias jual tapi hati-hati dengan kondisi oversold")
+            explanation_parts.append("Bias hindari, hanya untuk experienced trader")
             
         else:  # sideways
             recommendations.extend([
                 "🟡 RANGE TRADING: Harga bergerak sideways",
-                "🎯 Entry Buy: Di dekat support",
-                "🎯 Entry Sell: Di dekat resistance", 
-                "📊 Target: Sisi berlawanan dari range",
-                "🛑 Stop Loss: Di luar range"
+                "🎯 Entry Buy: Di dekat support dengan konfirmasi bounce",
+                "🎯 Entry Sell: Take profit di resistance",
+                "📊 Target: Sisi resistance dari range",
+                "🛑 Stop Loss: Di bawah support range",
+                "💰 Strategy: Buy low, sell high dalam range"
             ])
-            explanation_parts.append("Trading range-bound, jangan FOMO")
+            explanation_parts.append("Trading range-bound, jangan FOMO breakout")
 
         # RSI-based adjustments
         if rsi_signal == "overbought":
@@ -888,19 +829,49 @@ def analysis(update, context):
         # ===== FINAL ANALYSIS TEXT =====
         # Format entry points text berdasarkan trend type
         if trend_type == "bullish":
-            entry_text = f"""🎪 ENTRY POINTS:
-• Conservative: Rp {entry_points['conservative']:,.0f}
-• Aggressive: Rp {entry_points['aggressive']:,.0f}
-• Breakout: Rp {entry_points['breakout']:,.0f}"""
+            entry_text = f"""🎪 ENTRY POINTS (BIAS BUY):
+• Conservative (BUY): Rp {entry_points['conservative']:,.0f} - Pullback ke support
+• Aggressive (BUY): Rp {entry_points['aggressive']:,.0f} - Current price  
+• Breakout (BUY): Rp {entry_points['breakout']:,.0f} - Above resistance"""
         elif trend_type == "bearish":
-            entry_text = f"""🎪 ENTRY POINTS:
-• Conservative: Rp {entry_points['conservative']:,.0f}
-• Aggressive: Rp {entry_points['aggressive']:,.0f}
-• Breakdown: Rp {entry_points['breakdown']:,.0f}"""
+            if 'avoid' in entry_points:
+                entry_text = f"""🎪 ENTRY POINTS (BIAS AVOID):
+• {entry_points['avoid']}
+• Conservative (RISKY): Rp {entry_points['conservative']:,.0f} - Hanya jika bounce kuat
+• {entry_points['wait']}"""
+            else:
+                entry_text = f"""🎪 ENTRY POINTS (BIAS AVOID):
+• HINDARI posisi baru
+• Tunggu reversal confirmation"""
         else:
-            entry_text = f"""🎪 ENTRY POINTS:
-• Buy Near Support: Rp {entry_points['buy_near_support']:,.0f}
-• Sell Near Resistance: Rp {entry_points['sell_near_resistance']:,.0f}"""
+            entry_text = f"""🎪 ENTRY POINTS (RANGE TRADING):
+• Buy Support: Rp {entry_points['buy_support']:,.0f} - Area support
+• Current Price: Rp {entry_points['current_price']:,.0f}
+• Breakout Buy: Rp {entry_points['breakout']:,.0f} - Above resistance"""
+
+        # Hitung risk/reward ratio
+        if 'recommended' in entry_points and isinstance(entry_points['recommended'], (int, float)):
+            entry_price = entry_points['recommended']
+            risk = entry_price - stop_loss
+            reward = tp1 - entry_price
+            
+            if risk > 0:
+                rr_ratio = reward / risk
+                rr_text = f"{rr_ratio:.1f}:1"
+                if rr_ratio >= 2:
+                    rr_rating = "🟢 EXCELLENT"
+                elif rr_ratio >= 1.5:
+                    rr_rating = "🟡 GOOD" 
+                elif rr_ratio >= 1:
+                    rr_rating = "🟠 FAIR"
+                else:
+                    rr_rating = "🔴 POOR"
+            else:
+                rr_text = "N/A"
+                rr_rating = "⚠️ Check"
+        else:
+            rr_text = "N/A" 
+            rr_rating = "⚠️ Check"
 
         analysis_text = f"""
 📊 Analisa {kode} Harian
@@ -913,10 +884,10 @@ def analysis(update, context):
 {entry_text}
 
 🎯 TARGET & RISK:
-• TP1: Rp {tp1:,.0f}
-• TP2: Rp {tp2:,.0f} 
-• Stop Loss: Rp {stop_loss:,.0f}
-• Risk/Reward: ≈ 1:2 (favorable)
+• TP1: Rp {tp1:,.0f} (+{((tp1/current_price)-1)*100:.1f}%)
+• TP2: Rp {tp2:,.0f} (+{((tp2/current_price)-1)*100:.1f}%) 
+• Stop Loss: Rp {stop_loss:,.0f} (-{((1-stop_loss/current_price))*100:.1f}%)
+• Risk/Reward: {rr_text} {rr_rating}
 
 📈 INDIKATOR TEKNIKAL:
 • RSI: {rsi:.1f} ({rsi_signal})
@@ -944,24 +915,24 @@ def analysis(update, context):
         # Add final notes
         analysis_text += f"""
 📝 STRATEGI EXECUTION:
-- Sudah punya posisi: {['Hold dan monitor level kunci', 'Pertimbangkan averaging jika trend kuat', 'Siap exit jika trend berubah'][['bullish', 'bearish', 'sideways'].index(trend_type)]}
-- Ingin entry: Tunggu konfirmasi di level entry yang disebutkan
 - Money management: Jangan risk lebih dari 2% equity per trade
+- Position sizing: Sesuaikan dengan risk tolerance
+- Trading plan: Patuhi rencana yang sudah dibuat
 
 ⚠️ DISCLAIMER: 
-Analisis ini hanya untuk edukasi, bukan rekomendasi beli/jual. 
-Pastikan konfirmasi dengan analisis fundamental dan kondisi market.
+Analisis ini menggunakan DATA SIMULASI untuk demo bot.
+Bukan rekomendasi beli/jual. Pastikan analisis fundamental.
 """
 
         update.message.reply_text(analysis_text)
 
     except Exception as e:
+        logger.error(f"Error in /analysis: {e}")
         update.message.reply_text(f"❌ Error dalam analisis: {str(e)}")
 
-# ==== FAQ ====
 def faq(update, context):
     faq_text = """
-📚 FAQ - Istilah Trading
+📚 FAQ - Istilah Trading Saham Indonesia
 
 • MA (Moving Average) = Rata-rata harga dalam periode tertentu
 • MA20 = Rata-rata harga 20 hari terakhir
@@ -977,21 +948,20 @@ def faq(update, context):
 • Bearish = Kondisi market turun
 • Sideways = Harga bergerak dalam range tertentu
 
-📖 Tips:
-- Gunakan multiple indikator untuk konfirmasi
-- Selalu gunakan stop loss
-- Jangan emotional trading
+📖 Tips Trading Saham:
+- Hanya LONG positions (buy low, sell high)
+- Gunakan stop loss untuk proteksi
 - Risk management yang baik kunci sukses
+- Jangan emotional trading
+- Diversifikasi portfolio
 """
 
     update.message.reply_text(faq_text)
 
 # ==== MAIN ====
 def main():
-    # Get token from environment variable or use default
     TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', "7766255048:AAF2DO86mIOZaEJnnYSLqXMOjGY5SxDVYA8")
     
-    # FIXED: Remove use_context parameter for python-telegram-bot v13.7
     updater = Updater(TOKEN)
     dp = updater.dispatcher
 
@@ -1003,8 +973,18 @@ def main():
     dp.add_handler(CommandHandler("analysis", analysis))
     dp.add_handler(CommandHandler("faq", faq))
 
-    logger.info("Bot sedang berjalan...")
-    updater.start_polling()
+    def error_handler(update, context):
+        logger.error(f"Update {update} caused error {context.error}")
+
+    dp.add_error_handler(error_handler)
+
+    try:
+        updater.bot.delete_webhook()
+        logger.info("Bot sedang berjalan dengan data simulasi...")
+        updater.start_polling(timeout=30, clean=True)
+    except Exception as e:
+        logger.error(f"Error starting bot: {e}")
+    
     updater.idle()
 
 if __name__ == "__main__":
