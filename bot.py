@@ -58,13 +58,25 @@ def get_stock_data(symbol, period="6mo", interval="1d"):
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
         
+        logger.info(f"Fetching data for {symbol} with period {period}")
         response = requests.get(url, params=params, headers=headers, timeout=30)
         response.raise_for_status()
         
         data = response.json()
         
+        # Check if data is available
+        if 'chart' not in data or 'result' not in data['chart'] or not data['chart']['result']:
+            logger.error(f"No data available for {symbol}")
+            return pd.DataFrame()
+        
         # Parse data dari response
         chart_data = data['chart']['result'][0]
+        
+        # Check if required data exists
+        if 'timestamp' not in chart_data or 'indicators' not in chart_data:
+            logger.error(f"Incomplete data for {symbol}")
+            return pd.DataFrame()
+            
         timestamps = chart_data['timestamp']
         quotes = chart_data['indicators']['quote'][0]
         
@@ -84,12 +96,13 @@ def get_stock_data(symbol, period="6mo", interval="1d"):
         # Remove rows dengan NaN values
         df = df.dropna()
         
+        logger.info(f"Successfully fetched {len(df)} records for {symbol}")
         return df
         
     except Exception as e:
         logger.error(f"Error getting stock data for {symbol}: {e}")
         return pd.DataFrame()
-
+    
 def get_current_price(symbol):
     """
     Mendapatkan harga real-time dari API alternatif
@@ -109,6 +122,11 @@ def get_current_price(symbol):
         response.raise_for_status()
         
         data = response.json()
+        
+        # Check if data exists
+        if 'chart' not in data or 'result' not in data['chart'] or not data['chart']['result']:
+            return None
+            
         current_price = data['chart']['result'][0]['meta']['regularMarketPrice']
         
         return float(current_price) if current_price else None
@@ -116,7 +134,7 @@ def get_current_price(symbol):
     except Exception as e:
         logger.error(f"Error getting current price for {symbol}: {e}")
         return None
-
+    
 # ==== HELPER FUNCTIONS ====
 def safe_last(series):
     """Ambil nilai terakhir dari Series atau DataFrame dengan aman"""
@@ -402,7 +420,7 @@ def chart(update, context):
         symbol = kode + ".JK"
 
         # Download data
-        data = get_stock_data(symbol, period="6mo", interval="1d", auto_adjust=True)
+        data = get_stock_data(symbol, period="6mo", interval="1d")
 
         if len(data) == 0:
             update.message.reply_text(f"❌ Tidak menemukan data untuk {kode}")
@@ -674,7 +692,7 @@ def analysis(update, context):
 
     try:
         # Get data dengan periode lebih panjang untuk MA200
-        data = get_stock_data(symbol, period="1y", interval="1d", auto_adjust=True)
+        data = get_stock_data(symbol, period="1y", interval="1d")
         if len(data) == 0:
             update.message.reply_text(f"❌ Tidak menemukan data untuk {kode}")
             return
