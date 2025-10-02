@@ -1,7 +1,6 @@
 import os
 import sys
 from telegram.ext import Updater, CommandHandler
-import yfinance as yf
 import matplotlib
 matplotlib.use('Agg')  # HARUS diimport SEBELUM matplotlib.pyplot
 import matplotlib.pyplot as plt
@@ -9,9 +8,13 @@ import mplfinance as mpf
 import pandas as pd
 import io
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import traceback
+import requests
+import json
+from bs4 import BeautifulSoup
+import time
 
 # Setup logging untuk monitoring di Railway
 logging.basicConfig(
@@ -20,14 +23,101 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Konfigurasi untuk Railway
-PORT = int(os.environ.get('PORT', 8443))
-TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '7766255048:AAF2DO86mIOZaEJnnYSLqXMOjGY5SxDVYA8')
+# ==== ALTERNATIVE TO YFINANCE ====
+def get_stock_data(symbol, period="6mo", interval="1d"):
+    """
+    Mendapatkan data saham dari API alternatif (menggantikan yfinance)
+    """
+    try:
+        # Format symbol untuk Indonesia (contoh: BBCA.JK -> BBCA)
+        if symbol.endswith('.JK'):
+            symbol = symbol.replace('.JK', '')
+        
+        # Gunakan API Yahoo Finance alternatif
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}.JK"
+        
+        # Map period ke days
+        period_map = {
+            "1d": "1d",
+            "5d": "5d",
+            "1mo": "1mo",
+            "3mo": "3mo",
+            "6mo": "6mo",
+            "1y": "1y",
+            "2y": "2y",
+            "5y": "5y"
+        }
+        
+        params = {
+            'range': period_map.get(period, '6mo'),
+            'interval': interval,
+            'includePrePost': 'false'
+        }
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        response = requests.get(url, params=params, headers=headers, timeout=30)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        # Parse data dari response
+        chart_data = data['chart']['result'][0]
+        timestamps = chart_data['timestamp']
+        quotes = chart_data['indicators']['quote'][0]
+        
+        # Create DataFrame
+        df_data = {
+            'Open': quotes['open'],
+            'High': quotes['high'],
+            'Low': quotes['low'],
+            'Close': quotes['close'],
+            'Volume': quotes['volume']
+        }
+        
+        df = pd.DataFrame(df_data)
+        df['Date'] = pd.to_datetime(timestamps, unit='s')
+        df.set_index('Date', inplace=True)
+        
+        # Remove rows dengan NaN values
+        df = df.dropna()
+        
+        return df
+        
+    except Exception as e:
+        logger.error(f"Error getting stock data for {symbol}: {e}")
+        return pd.DataFrame()
 
-# Konfigurasi matplotlib untuk environment tanpa display
-plt.switch_backend('Agg')
+def get_current_price(symbol):
+    """
+    Mendapatkan harga real-time dari API alternatif
+    """
+    try:
+        if symbol.endswith('.JK'):
+            symbol = symbol.replace('.JK', '')
+            
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}.JK"
+        params = {'range': '1d', 'interval': '1m'}
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        response = requests.get(url, params=params, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        current_price = data['chart']['result'][0]['meta']['regularMarketPrice']
+        
+        return float(current_price) if current_price else None
+        
+    except Exception as e:
+        logger.error(f"Error getting current price for {symbol}: {e}")
+        return None
 
-# ==== Helper Functions ====
+# ==== HELPER FUNCTIONS ====
 def safe_last(series):
     """Ambil nilai terakhir dari Series atau DataFrame dengan aman"""
     if series is None or len(series) == 0:
@@ -46,21 +136,6 @@ def safe_last(series):
 
     return val if pd.notna(val) else None
 
-def get_current_price(symbol):
-    """Mendapatkan harga real-time"""
-    try:
-        ticker = yf.Ticker(symbol)
-        data = ticker.history(period='1d', interval='1m')
-        if len(data) > 0:
-            return data['Close'].iloc[-1]
-        else:
-            # Fallback ke data harian
-            data = ticker.history(period='1d')
-            return data['Close'].iloc[-1] if len(data) > 0 else None
-    except Exception as e:
-        logger.error(f"Error getting current price for {symbol}: {e}")
-        return None
-
 def calculate_rsi(data, period=14):
     """Menghitung RSI"""
     delta = data['Close'].diff()
@@ -77,14 +152,14 @@ def find_support_resistance(data, current_price, lookback_days=60):
     # Support: cari level di BAWAH harga saat ini
     price_below = recent_data[recent_data['Low'] < current_price]['Low']
     if len(price_below) > 0:
-        support = float(price_below.max())  # Convert ke float
+        support = float(price_below.max())
     else:
         support = float(recent_data['Low'].min())
 
     # Resistance: cari level di ATAS harga saat ini
     price_above = recent_data[recent_data['High'] > current_price]['High']
     if len(price_above) > 0:
-        resistance = float(price_above.min())  # Convert ke float
+        resistance = float(price_above.min())
     else:
         resistance = float(recent_data['High'].max())
 
@@ -153,7 +228,7 @@ def ma(update, context):
 
     try:
         # Get data
-        data = yf.download(symbol, period="1y", interval="1d")
+        data = get_stock_data(symbol, period="1y", interval="1d")
         if len(data) == 0:
             update.message.reply_text(f"❌ Tidak menemukan data untuk {kode}")
             return
@@ -233,7 +308,7 @@ def alert(update, context):
     symbol = kode + ".JK"
 
     try:
-        data = yf.download(symbol, period="3mo", interval="1d")
+        data = get_stock_data(symbol, period="3mo", interval="1d")
         if len(data) == 0:
             update.message.reply_text(f"❌ Tidak menemukan data untuk {kode}")
             return
@@ -327,7 +402,7 @@ def chart(update, context):
         symbol = kode + ".JK"
 
         # Download data
-        data = yf.download(symbol, period="6mo", interval="1d", auto_adjust=True)
+        data = get_stock_data(symbol, period="6mo", interval="1d", auto_adjust=True)
 
         if len(data) == 0:
             update.message.reply_text(f"❌ Tidak menemukan data untuk {kode}")
@@ -599,7 +674,7 @@ def analysis(update, context):
 
     try:
         # Get data dengan periode lebih panjang untuk MA200
-        data = yf.download(symbol, period="1y", interval="1d", auto_adjust=True)
+        data = get_stock_data(symbol, period="1y", interval="1d", auto_adjust=True)
         if len(data) == 0:
             update.message.reply_text(f"❌ Tidak menemukan data untuk {kode}")
             return
@@ -966,6 +1041,7 @@ def error(update, context):
     logger.warning('Update "%s" caused error "%s"', update, context.error)
 
 # ==== MAIN FUNCTION ====
+# ==== MAIN FUNCTION ====
 def main():
     try:
         # Gunakan token dari environment variable
@@ -993,40 +1069,23 @@ def main():
         # Log all errors
         dp.add_error_handler(error)
 
-        # Check if running on Railway
-        is_railway = os.environ.get('RAILWAY_ENVIRONMENT') or os.environ.get('RAILWAY_STATIC_URL')
-        
-        if is_railway:
-            # Untuk deployment di Railway - gunakan webhook
-            PORT = int(os.environ.get('PORT', 8443))
-            WEBHOOK_URL = os.environ.get('RAILWAY_STATIC_URL', '')
-            
-            if WEBHOOK_URL:
-                # Gunakan webhook URL dari Railway
-                webhook_path = f"/webhook/{TOKEN}"
-                full_webhook_url = f"{WEBHOOK_URL}{webhook_path}"
-                
-                updater.start_webhook(
-                    listen="0.0.0.0",
-                    port=PORT,
-                    url_path=TOKEN,
-                    webhook_url=full_webhook_url
-                )
-                logger.info(f"Webhook mode started on port {PORT}")
-                logger.info(f"Webhook URL: {full_webhook_url}")
-            else:
-                # Fallback ke polling jika webhook URL tidak tersedia
-                updater.start_polling()
-                logger.info("Polling mode started (fallback - no webhook URL)")
-        else:
-            # Untuk development lokal
-            updater.start_polling()
-            logger.info("Polling mode started (local development)")
+        # Untuk Railway - selalu gunakan polling (lebih reliable)
+        updater.start_polling()
+        logger.info("Polling mode started - Bot berjalan!")
 
-        logger.info("Bot berhasil berjalan dan siap menerima commands!")
+        # Keep the bot running
         updater.idle()
 
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")
         logger.error(traceback.format_exc())
         sys.exit(1)
+
+def error(update, context):
+    """Log Errors caused by Updates."""
+    logger.error('Update "%s" caused error "%s"', update, context.error)
+    if context.error:
+        logger.error("Exception details: %s", traceback.format_exc())
+
+if __name__ == "__main__":
+    main()
