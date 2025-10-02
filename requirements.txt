@@ -1,9 +1,7 @@
-python-telegram-bot==13.7
+python-telegram-bot==13.15
 yfinance==0.2.18
-matplotlib==3.5.1
-mplfinance==0.12.9b7
-pandas==1.5.3
-numpy==1.21.6
-Pillow==9.5.0
-requests==2.31.0
-beautifulsoup4==4.12.2
+matplotlib==3.7.1
+mplfinance==0.12.10
+pandas==2.0.3
+numpy==1.24.3
+python-dotenv==1.0.0

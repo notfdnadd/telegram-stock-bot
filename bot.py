@@ -1,3 +1,4 @@
+import os
 from telegram.ext import Updater, CommandHandler
 import yfinance as yf
 import matplotlib.pyplot as plt
@@ -6,6 +7,21 @@ import pandas as pd
 import io
 import numpy as np
 from datetime import datetime
+import logging
+
+# Setup logging untuk monitoring di Railway
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Konfigurasi untuk Railway
+PORT = int(os.environ.get('PORT', 8443))
+TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '7766255048:AAF2DO86mIOZaEJnnYSLqXMOjGY5SxDVYA8')
+
+# Konfigurasi matplotlib untuk environment tanpa display
+plt.switch_backend('Agg')
 
 # ==== Helper Functions ====
 def safe_last(series):
@@ -37,7 +53,8 @@ def get_current_price(symbol):
             # Fallback ke data harian
             data = ticker.history(period='1d')
             return data['Close'].iloc[-1] if len(data) > 0 else None
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error getting current price for {symbol}: {e}")
         return None
 
 def calculate_rsi(data, period=14):
@@ -199,6 +216,7 @@ def ma(update, context):
         update.message.reply_text(pesan)
 
     except Exception as e:
+        logger.error(f"Error in /ma command: {e}")
         update.message.reply_text(f"❌ Error: {str(e)}")
 
 # ==== ALERT ====
@@ -291,6 +309,7 @@ def alert(update, context):
         update.message.reply_text(pesan)
 
     except Exception as e:
+        logger.error(f"Error in /alert command: {e}")
         update.message.reply_text(f"❌ Error: {str(e)}")
 
 # === CHART ===
@@ -473,6 +492,7 @@ def chart(update, context):
         plt.close(fig)
 
     except Exception as e:
+        logger.error(f"Error in /chart command: {e}")
         update.message.reply_text(f"❌ Error membuat chart: {str(e)}")
 
 # ==== REVISED ENTRY POINT CALCULATION ====
@@ -899,6 +919,7 @@ Pastikan konfirmasi dengan analisis fundamental dan kondisi market.
         update.message.reply_text(analysis_text)
 
     except Exception as e:
+        logger.error(f"Error in /analysis command: {e}")
         update.message.reply_text(f"❌ Error dalam analisis: {str(e)}")
 
 # ==== FAQ ====
@@ -935,12 +956,25 @@ def faq(update, context):
 
     update.message.reply_text(faq_text)
 
+# ==== ERROR HANDLER ====
+def error(update, context):
+    """Log Errors caused by Updates."""
+    logger.warning('Update "%s" caused error "%s"', update, context.error)
+
 # ==== MAIN ====
 def main():
-    TOKEN = "8252806375:AAFS9jvvyeAHVDpu2dfRtTag73tLBmB1xCY"
+    # Gunakan token dari environment variable
+    TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+    
+    if not TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN environment variable is required!")
+        return
+
+    # Create updater and dispatcher
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
 
+    # Add handlers
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("menu", menu))
     dp.add_handler(CommandHandler("ma", ma))
@@ -948,9 +982,32 @@ def main():
     dp.add_handler(CommandHandler("chart", chart))
     dp.add_handler(CommandHandler("analysis", analysis))
     dp.add_handler(CommandHandler("faq", faq))
+    
+    # Log all errors
+    dp.add_error_handler(error)
 
-    print("Bot sedang berjalan...")
-    updater.start_polling()
+    # Start the Bot
+    if os.environ.get('RAILWAY_ENVIRONMENT'):
+        # Untuk deployment di Railway
+        WEBHOOK_URL = os.environ.get('WEBHOOK_URL', '')
+        if WEBHOOK_URL:
+            updater.start_webhook(
+                listen="0.0.0.0",
+                port=PORT,
+                url_path=TOKEN,
+                webhook_url=f"{WEBHOOK_URL}/{TOKEN}"
+            )
+            logger.info("Webhook mode started")
+        else:
+            # Fallback ke polling jika WEBHOOK_URL tidak tersedia
+            updater.start_polling()
+            logger.info("Polling mode started (fallback)")
+    else:
+        # Untuk development lokal
+        updater.start_polling()
+        logger.info("Polling mode started (local development)")
+
+    logger.info("Bot sedang berjalan...")
     updater.idle()
 
 if __name__ == "__main__":
