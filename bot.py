@@ -953,7 +953,8 @@ def main():
     # Get token from environment variable or use default
     TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', "7766255048:AAF2DO86mIOZaEJnnYSLqXMOjGY5SxDVYA8")
     
-    updater = Updater(TOKEN, use_context=True)
+    # FIXED: Remove use_context parameter for python-telegram-bot v13.7
+    updater = Updater(TOKEN)
     dp = updater.dispatcher
 
     dp.add_handler(CommandHandler("start", start))

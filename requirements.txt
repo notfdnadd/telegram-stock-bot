@@ -1,4 +1,4 @@
-python-telegram-bot==20.7
+python-telegram-bot==13.7
 yfinance==0.2.18
 matplotlib==3.5.1
 mplfinance==0.12.9b7
