@@ -50,6 +50,45 @@ def get_current_price(symbol):
     except Exception:
         return None
 
+
+def fetch_history(symbol, period="1y", interval="1d", auto_adjust=False, max_retries=2):
+    """Robust wrapper to fetch historical data from yfinance with fallbacks.
+
+    Tries multiple strategies because sometimes yf.download returns empty in containerized
+    environments or Yahoo responds with no-data for a specific query.
+    """
+    try:
+        # First attempt: yf.download (fast)
+        df = yf.download(symbol, period=period, interval=interval, auto_adjust=auto_adjust)
+        if isinstance(df, pd.DataFrame) and len(df) > 0:
+            return df
+
+        # Second attempt: Ticker.history with same params
+        ticker = yf.Ticker(symbol)
+        df = ticker.history(period=period, interval=interval, auto_adjust=auto_adjust)
+        if isinstance(df, pd.DataFrame) and len(df) > 0:
+            return df
+
+        # Third attempt: explicit start/end window (derive days from period)
+        today = datetime.now().date()
+        days_map = {"1y": 365, "6mo": 182, "3mo": 90, "90d": 90}
+        days = days_map.get(period, 365)
+        start = today - pd.Timedelta(days=days)
+        df = ticker.history(start=start.strftime("%Y-%m-%d"), end=today.strftime("%Y-%m-%d"), interval=interval, auto_adjust=auto_adjust)
+        if isinstance(df, pd.DataFrame) and len(df) > 0:
+            return df
+
+        # Fourth attempt: try yf.download with threads disabled (some envs prefer it)
+        df = yf.download(symbol, period=period, interval=interval, auto_adjust=auto_adjust, threads=False)
+        if isinstance(df, pd.DataFrame) and len(df) > 0:
+            return df
+
+        # If still empty, return empty DataFrame
+        return pd.DataFrame()
+    except Exception as e:
+        logger.warning(f"fetch_history fallback failed for {symbol}: {e}")
+        return pd.DataFrame()
+
 def calculate_rsi(data, period=14):
     """Menghitung RSI"""
     delta = data['Close'].diff()
@@ -110,9 +149,9 @@ def ma(update, context):
     symbol = kode + ".JK"
     
     try:
-        # Get data
-        data = yf.download(symbol, period="1y", interval="1d")
-        if len(data) == 0:
+        # Get data (robust)
+        data = fetch_history(symbol, period="1y", interval="1d", auto_adjust=False)
+        if data is None or len(data) == 0:
             update.message.reply_text(f"❌ Tidak menemukan data untuk {kode}")
             return
 
@@ -190,8 +229,8 @@ def alert(update, context):
     symbol = kode + ".JK"
     
     try:
-        data = yf.download(symbol, period="3mo", interval="1d")
-        if len(data) == 0:
+        data = fetch_history(symbol, period="3mo", interval="1d", auto_adjust=False)
+        if data is None or len(data) == 0:
             update.message.reply_text(f"❌ Tidak menemukan data untuk {kode}")
             return
 
@@ -282,10 +321,9 @@ def chart(update, context):
         kode = context.args[0].upper()
         symbol = kode + ".JK"
         
-        # Download data
-        data = yf.download(symbol, period="6mo", interval="1d", auto_adjust=True)
-        
-        if len(data) == 0:
+        # Download data (robust)
+        data = fetch_history(symbol, period="6mo", interval="1d", auto_adjust=True)
+        if data is None or len(data) == 0:
             update.message.reply_text(f"❌ Tidak menemukan data untuk {kode}")
             return
 
@@ -618,9 +656,9 @@ def analysis(update, context):
     symbol = kode + ".JK"
     
     try:
-        # Get data dengan periode lebih panjang untuk MA200 - FIXED: explicit auto_adjust
-        data = yf.download(symbol, period="1y", interval="1d", auto_adjust=True)
-        if len(data) == 0:
+        # Get data dengan periode lebih panjang untuk MA200 - robust fetch
+        data = fetch_history(symbol, period="1y", interval="1d", auto_adjust=True)
+        if data is None or len(data) == 0:
             update.message.reply_text(f"❌ Tidak menemukan data untuk {kode}")
             return
 

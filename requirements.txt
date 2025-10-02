@@ -5,3 +5,5 @@ mplfinance==0.12.9b7
 pandas==1.5.3
 numpy==1.21.6
 Pillow==9.5.0
+requests==2.31.0
+beautifulsoup4==4.12.2
