@@ -6,6 +6,16 @@ import pandas as pd
 import io
 import numpy as np
 from datetime import datetime
+import os
+import logging
+
+# Configure logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+
+logger = logging.getLogger(__name__)
 
 # ==== Helper Functions ====
 def safe_last(series):
@@ -940,7 +950,9 @@ def faq(update, context):
 
 # ==== MAIN ====
 def main():
-    TOKEN = "7766255048:AAF2DO86mIOZaEJnnYSLqXMOjGY5SxDVYA8"
+    # Get token from environment variable or use default
+    TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', "7766255048:AAF2DO86mIOZaEJnnYSLqXMOjGY5SxDVYA8")
+    
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
 
@@ -952,7 +964,7 @@ def main():
     dp.add_handler(CommandHandler("analysis", analysis))
     dp.add_handler(CommandHandler("faq", faq))
 
-    print("Bot sedang berjalan...")
+    logger.info("Bot sedang berjalan...")
     updater.start_polling()
     updater.idle()
 
