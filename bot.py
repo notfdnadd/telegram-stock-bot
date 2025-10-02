@@ -1,6 +1,9 @@
 import os
+import sys
 from telegram.ext import Updater, CommandHandler
 import yfinance as yf
+import matplotlib
+matplotlib.use('Agg')  # HARUS diimport SEBELUM matplotlib.pyplot
 import matplotlib.pyplot as plt
 import mplfinance as mpf
 import pandas as pd
@@ -8,6 +11,7 @@ import io
 import numpy as np
 from datetime import datetime
 import logging
+import traceback
 
 # Setup logging untuk monitoring di Railway
 logging.basicConfig(
@@ -961,54 +965,68 @@ def error(update, context):
     """Log Errors caused by Updates."""
     logger.warning('Update "%s" caused error "%s"', update, context.error)
 
-# ==== MAIN ====
+# ==== MAIN FUNCTION ====
 def main():
-    # Gunakan token dari environment variable
-    TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-    
-    if not TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN environment variable is required!")
-        return
+    try:
+        # Gunakan token dari environment variable
+        TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+        
+        if not TOKEN:
+            logger.error("TELEGRAM_BOT_TOKEN environment variable is required!")
+            sys.exit(1)
 
-    # Create updater and dispatcher
-    updater = Updater(TOKEN, use_context=True)
-    dp = updater.dispatcher
+        logger.info("Starting bot...")
+        
+        # Create updater and dispatcher
+        updater = Updater(TOKEN, use_context=True)
+        dp = updater.dispatcher
 
-    # Add handlers
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("menu", menu))
-    dp.add_handler(CommandHandler("ma", ma))
-    dp.add_handler(CommandHandler("alert", alert))
-    dp.add_handler(CommandHandler("chart", chart))
-    dp.add_handler(CommandHandler("analysis", analysis))
-    dp.add_handler(CommandHandler("faq", faq))
-    
-    # Log all errors
-    dp.add_error_handler(error)
+        # Add handlers
+        dp.add_handler(CommandHandler("start", start))
+        dp.add_handler(CommandHandler("menu", menu))
+        dp.add_handler(CommandHandler("ma", ma))
+        dp.add_handler(CommandHandler("alert", alert))
+        dp.add_handler(CommandHandler("chart", chart))
+        dp.add_handler(CommandHandler("analysis", analysis))
+        dp.add_handler(CommandHandler("faq", faq))
+        
+        # Log all errors
+        dp.add_error_handler(error)
 
-    # Start the Bot
-    if os.environ.get('RAILWAY_ENVIRONMENT'):
-        # Untuk deployment di Railway
-        WEBHOOK_URL = os.environ.get('WEBHOOK_URL', '')
-        if WEBHOOK_URL:
-            updater.start_webhook(
-                listen="0.0.0.0",
-                port=PORT,
-                url_path=TOKEN,
-                webhook_url=f"{WEBHOOK_URL}/{TOKEN}"
-            )
-            logger.info("Webhook mode started")
+        # Check if running on Railway
+        is_railway = os.environ.get('RAILWAY_ENVIRONMENT') or os.environ.get('RAILWAY_STATIC_URL')
+        
+        if is_railway:
+            # Untuk deployment di Railway - gunakan webhook
+            PORT = int(os.environ.get('PORT', 8443))
+            WEBHOOK_URL = os.environ.get('RAILWAY_STATIC_URL', '')
+            
+            if WEBHOOK_URL:
+                # Gunakan webhook URL dari Railway
+                webhook_path = f"/webhook/{TOKEN}"
+                full_webhook_url = f"{WEBHOOK_URL}{webhook_path}"
+                
+                updater.start_webhook(
+                    listen="0.0.0.0",
+                    port=PORT,
+                    url_path=TOKEN,
+                    webhook_url=full_webhook_url
+                )
+                logger.info(f"Webhook mode started on port {PORT}")
+                logger.info(f"Webhook URL: {full_webhook_url}")
+            else:
+                # Fallback ke polling jika webhook URL tidak tersedia
+                updater.start_polling()
+                logger.info("Polling mode started (fallback - no webhook URL)")
         else:
-            # Fallback ke polling jika WEBHOOK_URL tidak tersedia
+            # Untuk development lokal
             updater.start_polling()
-            logger.info("Polling mode started (fallback)")
-    else:
-        # Untuk development lokal
-        updater.start_polling()
-        logger.info("Polling mode started (local development)")
+            logger.info("Polling mode started (local development)")
 
-    logger.info("Bot sedang berjalan...")
-    updater.idle()
+        logger.info("Bot berhasil berjalan dan siap menerima commands!")
+        updater.idle()
 
-if __name__ == "__main__":
-    main()
+    except Exception as e:
+        logger.error(f"Failed to start bot: {e}")
+        logger.error(traceback.format_exc())
+        sys.exit(1)
