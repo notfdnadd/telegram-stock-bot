@@ -1222,7 +1222,7 @@ def error(update, context):
 def main():
     try:
         # Gunakan token dari environment variable
-        TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8484567302:AAEfhJ4sa6xD18AqVCj48zrxgEwOH32Rlxc')
+        TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 
         if not TOKEN:
             logger.error("TELEGRAM_BOT_TOKEN environment variable is required!")
