@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # ==== KONFIGURASI BOT ====
 BOT_USERNAME = "papitanyasahambot"
 CHANNEL_NAME = "BOT PAPI_TANYA_SAHAM"
-ALLOWED_GROUP_ID = "ALLOWED_GROUP_ID"  # Group ID yang diizinkan
+ALLOWED_GROUP_ID = "-1002421148967"  # Group ID yang diizinkan
 
 def debug(update, context):
     """Debug command untuk melihat info chat"""
