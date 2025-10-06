@@ -1,6 +1,6 @@
 import os
 import sys
-from telegram.ext import Updater, CommandHandler
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 import matplotlib
 matplotlib.use('Agg')  # HARUS diimport SEBELUM matplotlib.pyplot
 import matplotlib.pyplot as plt
@@ -23,6 +23,127 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ==== KONFIGURASI BOT ====
+BOT_USERNAME = "papitanyasahambot"
+CHANNEL_NAME = "inicobacoba"
+ALLOWED_GROUP_ID = "-1002914747943"  # Group ID yang diizinkan
+
+def debug(update, context):
+    """Debug command untuk melihat info chat"""
+    chat = update.effective_chat
+    update.message.reply_text(
+        f"Chat Type: {chat.type}\n"
+        f"Chat ID: {chat.id}\n"
+        f"Chat Title: {chat.title}\n"
+        f"Chat Username: {chat.username}"
+    )
+
+def is_allowed_group(update):
+    """Cek apakah bot dijalankan di group yang diizinkan"""
+    chat_id = str(update.effective_chat.id)
+    chat_type = update.effective_chat.type
+
+    # Hanya izinkan supergroup dengan ID yang spesifik
+    if chat_type == "supergroup" and chat_id == ALLOWED_GROUP_ID:
+        return True
+
+    # Blok private chat dan group lain
+    logger.warning(f"Access denied - Chat ID: {chat_id}, Type: {chat_type}")
+    return False
+
+def send_access_denied_message(update):
+    """Kirim pesan denied yang profesional"""
+    denied_message = (
+        "🚫 *Akses Ditolak*\n\n"
+        "Bot ini khusus untuk channel **inicobacoba** saja.\n\n"
+        "✅ **Untuk mengakses bot ini:**\n"
+        "1. Pastikan Anda sudah bergabung dengan channel inicobacoba\n"
+        "2. Gunakan bot hanya dari dalam channel tersebut\n\n"
+        "_Terima kasih atas pengertiannya_"
+    )
+
+    try:
+        update.message.reply_text(denied_message, parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Error sending denied message: {e}")
+
+def restricted_group(func):
+    """Decorator untuk membatasi command hanya ke group yang diizinkan"""
+    def wrapped(update, context, *args, **kwargs):
+        if not is_allowed_group(update):
+            # Kirim pesan denied yang profesional
+            send_access_denied_message(update)
+            return
+        return func(update, context, *args, **kwargs)
+    return wrapped
+
+def send_reminder(update, context):
+    """Kirim reminder untuk pesan non-command"""
+    try:
+        logger.info(f"Received message in group: {update.message.text}")
+
+        if not is_allowed_group(update):
+            logger.info("Not from allowed group, ignoring")
+            return
+
+        if not update.message.text:
+            return
+
+        # Cek jika bukan command
+        message_text = update.message.text.strip()
+        if not message_text.startswith('/'):
+            logger.info(f"Sending reminder for non-command message: {message_text}")
+
+            reminder_text = (
+                "💡 *Panduan Penggunaan Bot*\n\n"
+                "Channel ini dikhususkan untuk analisis saham otomatis menggunakan command bot.\n\n"
+                "📋 *Silakan gunakan command berikut:*\n"
+                "• /menu - Menampilkan menu lengkap\n"
+                "• /ma <kode> - Analisis Moving Average (Contoh: /ma BBCA)\n"
+                "• /alert <kode> - Deteksi sinyal trading & volume\n"
+                "• /chart <kode> - Chart teknikal lengkap\n"
+                "• /analysis <kode> - Analisis mendalam dengan rekomendasi\n"
+                "• /faq - Panduan istilah trading\n\n"
+                "⚠️ *Perhatian:*\n"
+                "• Setiap emiten hanya bisa dianalisis sekali per 10 menit\n"
+                "• Gunakan format command yang benar\n"
+                "• Hindari mengirim pesan teks biasa untuk menjaga kebersihan channel\n\n"
+                "📊 *papitanyasaham* - Analisis Saham Terpercaya"
+            )
+
+            # Kirim reminder sebagai reply ke pesan user
+            update.message.reply_text(
+                reminder_text,
+                parse_mode='Markdown',
+                reply_to_message_id=update.message.message_id
+            )
+            logger.info("Reminder sent successfully")
+
+    except Exception as e:
+        logger.error(f"Error in send_reminder: {e}")
+
+# ==== CACHE UNTUK MENCEGAH DUPLIKASI REQUEST ====
+request_cache = {}
+CACHE_DURATION = 10  # 10 menit dalam detik
+
+def check_cache(command, symbol):
+    """Cek apakah stock sudah dianalisis dalam 10 menit terakhir"""
+    cache_key = f"{command}_{symbol}"
+    current_time = time.time()
+
+    if cache_key in request_cache:
+        last_time = request_cache[cache_key]
+        if current_time - last_time < CACHE_DURATION:
+            return True
+
+    # Update cache
+    request_cache[cache_key] = current_time
+    return False
+
+def add_watermark(text):
+    """Menambahkan watermark papitanyasaham ke text"""
+    return f"{text}\n\n📊 papitanyasaham"
+
 # ==== ALTERNATIVE TO YFINANCE ====
 def get_stock_data(symbol, period="6mo", interval="1d"):
     """
@@ -32,10 +153,10 @@ def get_stock_data(symbol, period="6mo", interval="1d"):
         # Format symbol untuk Indonesia (contoh: BBCA.JK -> BBCA)
         if symbol.endswith('.JK'):
             symbol = symbol.replace('.JK', '')
-        
+
         # Gunakan API Yahoo Finance alternatif
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}.JK"
-        
+
         # Map period ke days
         period_map = {
             "1d": "1d",
@@ -47,39 +168,39 @@ def get_stock_data(symbol, period="6mo", interval="1d"):
             "2y": "2y",
             "5y": "5y"
         }
-        
+
         params = {
             'range': period_map.get(period, '6mo'),
             'interval': interval,
             'includePrePost': 'false'
         }
-        
+
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
-        
+
         logger.info(f"Fetching data for {symbol} with period {period}")
         response = requests.get(url, params=params, headers=headers, timeout=30)
         response.raise_for_status()
-        
+
         data = response.json()
-        
+
         # Check if data is available
         if 'chart' not in data or 'result' not in data['chart'] or not data['chart']['result']:
             logger.error(f"No data available for {symbol}")
             return pd.DataFrame()
-        
+
         # Parse data dari response
         chart_data = data['chart']['result'][0]
-        
+
         # Check if required data exists
         if 'timestamp' not in chart_data or 'indicators' not in chart_data:
             logger.error(f"Incomplete data for {symbol}")
             return pd.DataFrame()
-            
+
         timestamps = chart_data['timestamp']
         quotes = chart_data['indicators']['quote'][0]
-        
+
         # Create DataFrame
         df_data = {
             'Open': quotes['open'],
@@ -88,21 +209,21 @@ def get_stock_data(symbol, period="6mo", interval="1d"):
             'Close': quotes['close'],
             'Volume': quotes['volume']
         }
-        
+
         df = pd.DataFrame(df_data)
         df['Date'] = pd.to_datetime(timestamps, unit='s')
         df.set_index('Date', inplace=True)
-        
+
         # Remove rows dengan NaN values
         df = df.dropna()
-        
+
         logger.info(f"Successfully fetched {len(df)} records for {symbol}")
         return df
-        
+
     except Exception as e:
         logger.error(f"Error getting stock data for {symbol}: {e}")
         return pd.DataFrame()
-    
+
 def get_current_price(symbol):
     """
     Mendapatkan harga real-time dari API alternatif
@@ -110,31 +231,31 @@ def get_current_price(symbol):
     try:
         if symbol.endswith('.JK'):
             symbol = symbol.replace('.JK', '')
-            
+
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}.JK"
         params = {'range': '1d', 'interval': '1m'}
-        
+
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
-        
+
         response = requests.get(url, params=params, headers=headers, timeout=10)
         response.raise_for_status()
-        
+
         data = response.json()
-        
+
         # Check if data exists
         if 'chart' not in data or 'result' not in data['chart'] or not data['chart']['result']:
             return None
-            
+
         current_price = data['chart']['result'][0]['meta']['regularMarketPrice']
-        
+
         return float(current_price) if current_price else None
-        
+
     except Exception as e:
         logger.error(f"Error getting current price for {symbol}: {e}")
         return None
-    
+
 # ==== HELPER FUNCTIONS ====
 def safe_last(series):
     """Ambil nilai terakhir dari Series atau DataFrame dengan aman"""
@@ -186,56 +307,67 @@ def find_support_resistance(data, current_price, lookback_days=60):
 def find_improved_support_resistance(data, current_price, ma20, ma50, ma200, lookback_days=60):
     """Mencari level support dan resistance yang lebih akurat"""
     recent_data = data.tail(lookback_days)
-    
+
     # Method 1: Recent highs and lows
     recent_high = float(recent_data['High'].max())
     recent_low = float(recent_data['Low'].min())
-    
+
     # Method 2: Psychological levels (round numbers)
     base_level = round(current_price / 100) * 100
     psychological_levels = [base_level + i * 100 for i in range(-5, 6)]
-    
+
     # Method 3: Moving averages as dynamic levels
     ma_levels = []
     if ma20: ma_levels.append(float(ma20))
     if ma50: ma_levels.append(float(ma50))
     if ma200: ma_levels.append(float(ma200))
-    
+
     # Combine all levels
     all_levels = psychological_levels + ma_levels + [recent_high, recent_low]
-    
+
     # Filter levels
     support_candidates = [level for level in all_levels if level < current_price * 0.99]
     resistance_candidates = [level for level in all_levels if level > current_price * 1.01]
-    
+
     # Take strongest levels
     support = max(support_candidates) if support_candidates else recent_low
     resistance = min(resistance_candidates) if resistance_candidates else recent_high
-    
+
     return float(support), float(resistance)
 
-# ==== START ====
+# ==== COMMAND HANDLERS ====
+@restricted_group
 def start(update, context):
-    update.message.reply_text(
-        "Halo! Saya bot trading saham Indonesia.\n\n"
+    if check_cache("start", "general"):
+        update.message.reply_text("🔄 Bot sedang aktif di channel ini")
+        return
+
+    welcome_text = add_watermark(
+        "Halo! Saya bot trading saham Indonesia dari *papitanyasaham*.\n\n"
         "Saya dapat membantu analisis teknikal saham-saham BEI.\n\n"
         "Ketik /menu untuk melihat fitur yang tersedia."
     )
+    update.message.reply_text(welcome_text, parse_mode='Markdown')
 
-# ==== MENU ====
+@restricted_group
 def menu(update, context):
-    text = (
-        "📌 Menu Bot Trading Saham:\n\n"
+    if check_cache("menu", "general"):
+        update.message.reply_text("📋 Menu sudah ditampilkan sebelumnya, scroll ke atas")
+        return
+
+    text = add_watermark(
+        "📌 Menu Bot Trading Saham *papitanyasaham*:\n\n"
         "/ma <kode> → Cek Moving Average (MA10, MA20, MA50, MA100, MA200)\n"
         "/alert <kode> → Deteksi sinyal trading & volume\n"
         "/chart <kode> → Chart lengkap (Candle + Volume + RSI + MACD)\n"
         "/analysis <kode> → Analisis teknikal mendalam\n"
         "/faq → Penjelasan istilah trading\n\n"
-        "Contoh: /ma BBCA"
+        "Contoh: /ma BBCA\n\n"
+        "⚠️ *Note:* Setiap emiten hanya bisa dianalisis sekali per 10 menit"
     )
-    update.message.reply_text(text)
+    update.message.reply_text(text, parse_mode='Markdown')
 
-# ==== MA ====
+@restricted_group
 def ma(update, context):
     if len(context.args) != 1:
         update.message.reply_text("❌ Format salah. Contoh: /ma BBCA")
@@ -243,6 +375,11 @@ def ma(update, context):
 
     kode = context.args[0].upper()
     symbol = kode + ".JK"
+
+    # Cek cache untuk mencegah duplikasi
+    if check_cache("ma", kode):
+        update.message.reply_text(f"⚠️ Emiten {kode} sudah dianalisis dalam 10 menit terakhir, silahkan scroll ke atas atau cari emiten lain")
+        return
 
     try:
         # Get data
@@ -304,7 +441,7 @@ def ma(update, context):
         else:
             trend = "ℹ️ Data belum cukup"
 
-        pesan = (
+        pesan = add_watermark(
             f"📊 MOVING AVERAGE {kode}\n"
             f"💰 Harga Saat Ini: {harga_text}\n\n"
             f"{ma_text}\n"
@@ -316,7 +453,7 @@ def ma(update, context):
         logger.error(f"Error in /ma command: {e}")
         update.message.reply_text(f"❌ Error: {str(e)}")
 
-# ==== ALERT ====
+@restricted_group
 def alert(update, context):
     if len(context.args) != 1:
         update.message.reply_text("❌ Format salah. Contoh: /alert BBCA")
@@ -324,6 +461,11 @@ def alert(update, context):
 
     kode = context.args[0].upper()
     symbol = kode + ".JK"
+
+    # Cek cache untuk mencegah duplikasi
+    if check_cache("alert", kode):
+        update.message.reply_text(f"⚠️ Emiten {kode} sudah dianalisis dalam 10 menit terakhir, silahkan scroll ke atas atau cari emiten lain")
+        return
 
     try:
         data = get_stock_data(symbol, period="3mo", interval="1d")
@@ -403,13 +545,13 @@ def alert(update, context):
         else:
             pesan += "\n🎯 Sinyal: SIDEWAYS / NETRAL"
 
-        update.message.reply_text(pesan)
+        update.message.reply_text(add_watermark(pesan))
 
     except Exception as e:
         logger.error(f"Error in /alert command: {e}")
         update.message.reply_text(f"❌ Error: {str(e)}")
 
-# === CHART ===
+@restricted_group
 def chart(update, context):
     try:
         if len(context.args) != 1:
@@ -418,6 +560,11 @@ def chart(update, context):
 
         kode = context.args[0].upper()
         symbol = kode + ".JK"
+
+        # Cek cache untuk mencegah duplikasi
+        if check_cache("chart", kode):
+            update.message.reply_text(f"⚠️ Emiten {kode} sudah dianalisis dalam 10 menit terakhir, silahkan scroll ke atas atau cari emiten lain")
+            return
 
         # Download data
         data = get_stock_data(symbol, period="6mo", interval="1d")
@@ -482,7 +629,7 @@ def chart(update, context):
             # Combine all levels
             all_levels = psychological_levels + ma_levels + [recent_high, recent_low]
 
-            # Filter dan pilih yang paling signifikan
+            # Filter levels
             support_candidates = [level for level in all_levels if level < current_price * 0.99]
             resistance_candidates = [level for level in all_levels if level > current_price * 1.01]
 
@@ -566,7 +713,9 @@ def chart(update, context):
                     bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor=color, alpha=0.8)
                 )
 
-        ax_main.set_title(f'Chart {kode} - {datetime.now().strftime("%Y-%m-%d")}', fontsize=14, fontweight='bold')
+        # Tambahkan watermark di chart
+        ax_main.set_title(f'Chart {kode} - {datetime.now().strftime("%Y-%m-%d")} | papitanyasaham',
+                         fontsize=14, fontweight='bold')
         ax_main.legend()
 
         ax_rsi.set_ylabel('RSI')
@@ -582,9 +731,14 @@ def chart(update, context):
 
         price_text = f"Rp {current_price:,.2f}" if current_price else "N/A"
 
+        caption = add_watermark(
+            f"📊 Chart {kode}\n💰 Harga: {price_text}\n📈 Periode: 6 Bulan\n\n"
+            f"Candle + MA + RSI + MACD\nS: Support | R: Resistance"
+        )
+
         update.message.reply_photo(
             photo=buf,
-            caption=f"📊 Chart {kode}\n💰 Harga: {price_text}\n📈 Periode: 6 Bulan\n\nCandle + MA + RSI + MACD\nS: Support | R: Resistance"
+            caption=caption
         )
         plt.close(fig)
 
@@ -632,7 +786,7 @@ def calculate_entry_points(current_price, support, resistance, trend_type):
 
 # ==== REVISED TARGET CALCULATION ====
 def calculate_targets_stoploss(current_price, support, resistance, trend_type, entry_points):
-    """Menghitung target dan stop loss untuk saham Indonesia (hanya profit dari kenaikan)"""
+    """Menghitung target dan stop loss untuk saham Indonesia (hanya bisa profit dari kenaikan)"""
     valid_current = current_price if current_price and not pd.isna(current_price) else 1000
     valid_support = support if support and not pd.isna(support) else valid_current * 0.95
     valid_resistance = resistance if resistance and not pd.isna(resistance) else valid_current * 1.05
@@ -643,7 +797,7 @@ def calculate_targets_stoploss(current_price, support, resistance, trend_type, e
         # BULLISH: TP1 di resistance, TP2 di atas resistance
         tp1 = valid_resistance
         tp2 = valid_resistance + price_range * 0.3  # 30% dari range di atas resistance
-        
+
         # Pastikan TP2 > TP1 untuk bullish
         if tp2 <= tp1:
             tp2 = tp1 * 1.05
@@ -656,7 +810,7 @@ def calculate_targets_stoploss(current_price, support, resistance, trend_type, e
         # Untuk saham Indonesia, target harus selalu di atas entry (tidak bisa short)
         tp1 = valid_current * 1.02  # Target kecil 2%
         tp2 = valid_current * 1.05  # Target 5% (konservatif)
-        
+
         # Stop loss ketat
         stop_loss = valid_current * 0.97
 
@@ -664,7 +818,7 @@ def calculate_targets_stoploss(current_price, support, resistance, trend_type, e
         # SIDEWAYS: TP buy di resistance
         tp1 = valid_resistance
         tp2 = valid_resistance * 1.03  # Sedikit di atas resistance
-        
+
         # Stop loss di bawah support
         stop_loss = valid_support * 0.98
 
@@ -681,7 +835,7 @@ def calculate_targets_stoploss(current_price, support, resistance, trend_type, e
 
     return float(tp1), float(tp2), float(stop_loss)
 
-# ==== ANALYSIS ====
+@restricted_group
 def analysis(update, context):
     if len(context.args) != 1:
         update.message.reply_text("❌ Format salah. Contoh: /analysis BBCA")
@@ -689,6 +843,11 @@ def analysis(update, context):
 
     kode = context.args[0].upper()
     symbol = kode + ".JK"
+
+    # Cek cache untuk mencegah duplikasi
+    if check_cache("analysis", kode):
+        update.message.reply_text(f"⚠️ Emiten {kode} sudah dianalisis dalam 10 menit terakhir, silahkan scroll ke atas atau cari emiten lain")
+        return
 
     try:
         # Get data dengan periode lebih panjang untuk MA200
@@ -958,7 +1117,7 @@ def analysis(update, context):
             rr_text = "N/A"
 
         analysis_text = f"""
-📊 Analisa {kode} Harian
+📊 Analisa {kode} Harian - *papitanyasaham*
 
 🎯 TREND: {trend_type.upper()} ({trend_strength.upper()})
 💰 Harga Saat Ini: Rp {current_price:,.2f}
@@ -1009,49 +1168,50 @@ def analysis(update, context):
 • Hindari catching falling knife
 • Tunggu konfirmasi reversal yang kuat
 
-📚 Analisis ini hanya untuk edukasi, bukan rekomendasi beli/jual.
+📚 *papitanyasaham* - Analisis ini hanya untuk edukasi, bukan rekomendasi beli/jual.
 Pastikan konfirmasi dengan analisis fundamental dan kondisi market.
 """
 
-        update.message.reply_text(analysis_text)
+        update.message.reply_text(add_watermark(analysis_text))
 
     except Exception as e:
         logger.error(f"Error in /analysis command: {e}")
         update.message.reply_text(f"❌ Error dalam analisis: {str(e)}")
 
-# ==== FAQ ====
+@restricted_group
 def faq(update, context):
-    faq_text = """
-📚 FAQ - Istilah Trading
+    if check_cache("faq", "general"):
+        update.message.reply_text("📚 FAQ sudah ditampilkan sebelumnya, scroll ke atas")
+        return
 
-• MA (Moving Average) = Rata-rata harga dalam periode tertentu
-• MA20 = Rata-rata harga 20 hari terakhir
-• Support = Level harga dimana biasanya terjadi pembelian
-• Resistance = Level harga dimana biasanya terjadi penjualan
-• RSI (Relative Strength Index) = Indikator momentum (0-100)
-  - >70 = Overbought (jenuh beli)
-  - <30 = Oversold (jenuh jual)
-• MACD = Indikator trend dan momentum
-• Volume = Jumlah saham yang diperdagangkan
-• Trend = Arah pergerakan harga
-• Bullish = Kondisi market naik
-• Bearish = Kondisi market turun
-• Sideways = Harga bergerak dalam range tertentu
+    faq_text = add_watermark(
+        "📚 FAQ - Istilah Trading *papitanyasaham*\n\n"
+        "• MA (Moving Average) = Rata-rata harga dalam periode tertentu\n"
+        "• MA20 = Rata-rata harga 20 hari terakhir\n"
+        "• Support = Level harga dimana biasanya terjadi pembelian\n"
+        "• Resistance = Level harga dimana biasanya terjadi penjualan\n"
+        "• RSI (Relative Strength Index) = Indikator momentum (0-100)\n"
+        "  - >70 = Overbought (jenuh beli)\n"
+        "  - <30 = Oversold (jenuh jual)\n"
+        "• MACD = Indikator trend dan momentum\n"
+        "• Volume = Jumlah saham yang diperdagangkan\n"
+        "• Trend = Arah pergerakan harga\n"
+        "• Bullish = Kondisi market naik\n"
+        "• Bearish = Kondisi market turun\n"
+        "• Sideways = Harga bergerak dalam range tertentu\n\n"
+        "⚠️ PENTING UNTUK SAHAM INDONESIA:\n"
+        "- Hanya bisa profit dari kenaikan harga (tidak bisa short)\n"
+        "- Hindari trading saat trend bearish kuat\n"
+        "- Tunggu konfirmasi reversal untuk entry\n"
+        "- Risk management adalah kunci utama\n\n"
+        "📖 Tips *papitanyasaham*:\n"
+        "- Gunakan multiple indikator untuk konfirmasi\n"
+        "- Selalu gunakan stop loss\n"
+        "- Jangan emotional trading\n"
+        "- Risk management yang baik kunci sukses"
+    )
 
-⚠️ PENTING UNTUK SAHAM INDONESIA:
-- Hanya bisa profit dari kenaikan harga (tidak bisa short)
-- Hindari trading saat trend bearish kuat
-- Tunggu konfirmasi reversal untuk entry
-- Risk management adalah kunci utama
-
-📖 Tips:
-- Gunakan multiple indikator untuk konfirmasi
-- Selalu gunakan stop loss
-- Jangan emotional trading
-- Risk management yang baik kunci sukses
-"""
-
-    update.message.reply_text(faq_text)
+    update.message.reply_text(faq_text, parse_mode='Markdown')
 
 # ==== ERROR HANDLER ====
 def error(update, context):
@@ -1059,23 +1219,22 @@ def error(update, context):
     logger.warning('Update "%s" caused error "%s"', update, context.error)
 
 # ==== MAIN FUNCTION ====
-# ==== MAIN FUNCTION ====
 def main():
     try:
         # Gunakan token dari environment variable
-        TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-        
+        TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8484567302:AAEfhJ4sa6xD18AqVCj48zrxgEwOH32Rlxc')
+
         if not TOKEN:
             logger.error("TELEGRAM_BOT_TOKEN environment variable is required!")
             sys.exit(1)
 
-        logger.info("Starting bot...")
-        
+        logger.info(f"Starting {BOT_USERNAME} for channel {ALLOWED_GROUP_ID}...")
+
         # Create updater and dispatcher
         updater = Updater(TOKEN, use_context=True)
         dp = updater.dispatcher
 
-        # Add handlers
+        # Add command handlers dengan decorator restriction
         dp.add_handler(CommandHandler("start", start))
         dp.add_handler(CommandHandler("menu", menu))
         dp.add_handler(CommandHandler("ma", ma))
@@ -1083,13 +1242,21 @@ def main():
         dp.add_handler(CommandHandler("chart", chart))
         dp.add_handler(CommandHandler("analysis", analysis))
         dp.add_handler(CommandHandler("faq", faq))
-        
+        dp.add_handler(CommandHandler("debug", debug))
+
+        # ✅ PERUBAHAN: Ganti delete dengan reminder message
+        dp.add_handler(MessageHandler(
+            Filters.text & ~Filters.command,
+            send_reminder
+        ))
+
         # Log all errors
         dp.add_error_handler(error)
 
         # Untuk Railway - selalu gunakan polling (lebih reliable)
         updater.start_polling()
         logger.info("Polling mode started - Bot berjalan!")
+        logger.info("✅ Bot siap mengirim reminder untuk pesan non-command...")
 
         # Keep the bot running
         updater.idle()
@@ -1098,12 +1265,6 @@ def main():
         logger.error(f"Failed to start bot: {e}")
         logger.error(traceback.format_exc())
         sys.exit(1)
-
-def error(update, context):
-    """Log Errors caused by Updates."""
-    logger.error('Update "%s" caused error "%s"', update, context.error)
-    if context.error:
-        logger.error("Exception details: %s", traceback.format_exc())
 
 if __name__ == "__main__":
     main()
