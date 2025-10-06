@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 BOT_USERNAME = "papitanyasahambot"
 CHANNEL_NAME = "BOT PAPI_TANYA_SAHAM"
 ALLOWED_GROUP_ID = "-1002421148967"  # Group ID yang diizinkan
-ALLOWED_TOPIC_ID = 1  # Ganti dengan ID topic/thread yang diinginkan (1, 2, 3, dst)
+ALLOWED_TOPIC_ID = "110867"  # Ganti dengan ID topic/thread yang diinginkan (1, 2, 3, dst)
 
 def debug(update, context):
     """Debug command untuk melihat info chat"""
