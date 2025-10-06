@@ -27,40 +27,51 @@ logger = logging.getLogger(__name__)
 BOT_USERNAME = "papitanyasahambot"
 CHANNEL_NAME = "BOT PAPI_TANYA_SAHAM"
 ALLOWED_GROUP_ID = "-1002421148967"  # Group ID yang diizinkan
+ALLOWED_TOPIC_ID = 1  # Ganti dengan ID topic/thread yang diinginkan (1, 2, 3, dst)
 
 def debug(update, context):
     """Debug command untuk melihat info chat"""
     chat = update.effective_chat
+    message_thread_id = update.message.message_thread_id if update.message else None
+    
     update.message.reply_text(
         f"Chat Type: {chat.type}\n"
         f"Chat ID: {chat.id}\n"
         f"Chat Title: {chat.title}\n"
+        f"Message Thread ID: {message_thread_id}\n"
         f"Chat Username: {chat.username}"
     )
 
-def is_allowed_group(update):
-    """Cek apakah bot dijalankan di group yang diizinkan"""
+def is_allowed_group_and_topic(update):
+    """Cek apakah bot dijalankan di group dan topic yang diizinkan"""
     chat_id = str(update.effective_chat.id)
     chat_type = update.effective_chat.type
+    
+    # Get message thread ID (topic ID)
+    message_thread_id = None
+    if update.message:
+        message_thread_id = update.message.message_thread_id
 
-    # Hanya izinkan supergroup dengan ID yang spesifik
-    if chat_type == "supergroup" and chat_id == ALLOWED_GROUP_ID:
+    # Hanya izinkan supergroup dengan ID yang spesifik DAN topic yang spesifik
+    if (chat_type == "supergroup" and 
+        chat_id == ALLOWED_GROUP_ID and 
+        message_thread_id == ALLOWED_TOPIC_ID):
         return True
 
-    # Blok private chat dan group lain
-    logger.warning(f"Access denied - Chat ID: {chat_id}, Type: {chat_type}")
+    # Blok private chat, group lain, dan topic lain
+    logger.warning(f"Access denied - Chat ID: {chat_id}, Type: {chat_type}, Topic ID: {message_thread_id}")
     return False
 
 def send_access_denied_message(update):
     """Kirim pesan denied yang profesional"""
     denied_message = (
         "🚫 *Akses Ditolak*\n\n"
-        "Bot ini khusus untuk channel **Papi Tanya Saham** saja.\n\n"
+        "Bot ini khusus untuk channel **Papi Tanya Saham** dan hanya di topic tertentu saja.\n\n"
         "✅ **Untuk mengakses bot ini:**\n"
         "1. Pastikan Anda sudah bergabung dengan channel **Papi Tanya Saham**\n"
-        "2. Gunakan bot hanya dari dalam channel tersebut\n\n"
-        "_Terima kasih atas pengertiannya_"
-        
+        "2. Gunakan bot hanya dari dalam channel tersebut\n"
+        "3. Gunakan bot hanya di topic yang ditentukan\n\n"
+        "_Terima kasih atas pengertiannya_\n\n"
         "Hubungi @papitanyasaham jika ada pertanyaan."
     )
 
@@ -69,12 +80,47 @@ def send_access_denied_message(update):
     except Exception as e:
         logger.error(f"Error sending denied message: {e}")
 
-def restricted_group(func):
-    """Decorator untuk membatasi command hanya ke group yang diizinkan"""
+def send_wrong_topic_message(update):
+    """Kirim pesan bahwa bot hanya bekerja di topic tertentu"""
+    wrong_topic_message = (
+        "📌 *Panduan Penggunaan Bot*\n\n"
+        "Bot ini hanya aktif di **topic/thread khusus** untuk analisis saham.\n\n"
+        "🔍 **Silakan cari topic dengan nama:**\n"
+        "• \"Analisis Saham Bot\" atau\n"
+        "• \"Papi Tanya Saham Bot\"\n\n"
+        "Di topic tersebut, Anda bisa menggunakan command:\n"
+        "• `/ma BBCA` - Analisis Moving Average\n"
+        "• `/chart BBCA` - Chart teknikal\n"
+        "• `/analysis BBCA` - Analisis mendalam\n"
+        "• `/alert BBCA` - Sinyal trading\n"
+        "• `/faq` - Panduan istilah\n\n"
+        "📊 *papitanyasaham*"
+    )
+    
+    try:
+        update.message.reply_text(
+            wrong_topic_message, 
+            parse_mode='Markdown',
+            reply_to_message_id=update.message.message_id
+        )
+    except Exception as e:
+        logger.error(f"Error sending wrong topic message: {e}")
+
+def restricted_group_and_topic(func):
+    """Decorator untuk membatasi command hanya ke group dan topic yang diizinkan"""
     def wrapped(update, context, *args, **kwargs):
-        if not is_allowed_group(update):
-            # Kirim pesan denied yang profesional
-            send_access_denied_message(update)
+        if not is_allowed_group_and_topic(update):
+            # Jika di group yang benar tapi wrong topic, kirim pesan khusus
+            chat_id = str(update.effective_chat.id)
+            chat_type = update.effective_chat.type
+            message_thread_id = update.message.message_thread_id if update.message else None
+            
+            if (chat_type == "supergroup" and 
+                chat_id == ALLOWED_GROUP_ID and 
+                message_thread_id != ALLOWED_TOPIC_ID):
+                send_wrong_topic_message(update)
+            else:
+                send_access_denied_message(update)
             return
         return func(update, context, *args, **kwargs)
     return wrapped
@@ -84,8 +130,8 @@ def send_reminder(update, context):
     try:
         logger.info(f"Received message in group: {update.message.text}")
 
-        if not is_allowed_group(update):
-            logger.info("Not from allowed group, ignoring")
+        if not is_allowed_group_and_topic(update):
+            logger.info("Not from allowed group/topic, ignoring")
             return
 
         if not update.message.text:
@@ -98,7 +144,7 @@ def send_reminder(update, context):
 
             reminder_text = (
                 "💡 *Panduan Penggunaan Bot*\n\n"
-                "Channel ini dikhususkan untuk analisis saham otomatis menggunakan command bot.\n\n"
+                "Topic ini dikhususkan untuk analisis saham otomatis menggunakan command bot.\n\n"
                 "📋 *Silakan gunakan command berikut:*\n"
                 "• /menu - Menampilkan menu lengkap\n"
                 "• /ma <kode> - Analisis Moving Average (Contoh: /ma BBCA)\n"
@@ -109,7 +155,7 @@ def send_reminder(update, context):
                 "⚠️ *Perhatian:*\n"
                 "• Setiap emiten hanya bisa dianalisis sekali per 10 menit\n"
                 "• Gunakan format command yang benar\n"
-                "• Hindari mengirim pesan teks biasa untuk menjaga kebersihan channel\n\n"
+                "• Hindari mengirim pesan teks biasa untuk menjaga kebersihan topic\n\n"
                 "📊 papitanyasaham"
             )
 
@@ -126,7 +172,7 @@ def send_reminder(update, context):
 
 # ==== CACHE UNTUK MENCEGAH DUPLIKASI REQUEST ====
 request_cache = {}
-CACHE_DURATION = 10  # 10 menit dalam detik
+CACHE_DURATION = 600  # 10 menit dalam detik
 
 def check_cache(command, symbol):
     """Cek apakah stock sudah dianalisis dalam 10 menit terakhir"""
@@ -338,10 +384,10 @@ def find_improved_support_resistance(data, current_price, ma20, ma50, ma200, loo
     return float(support), float(resistance)
 
 # ==== COMMAND HANDLERS ====
-@restricted_group
+@restricted_group_and_topic
 def start(update, context):
     if check_cache("start", "general"):
-        update.message.reply_text("🔄 Bot sedang aktif di channel ini")
+        update.message.reply_text("🔄 Bot sedang aktif di topic ini")
         return
 
     welcome_text = add_watermark(
@@ -351,7 +397,7 @@ def start(update, context):
     )
     update.message.reply_text(welcome_text, parse_mode='Markdown')
 
-@restricted_group
+@restricted_group_and_topic
 def menu(update, context):
     if check_cache("menu", "general"):
         update.message.reply_text("📋 Menu sudah ditampilkan sebelumnya, scroll ke atas")
@@ -369,7 +415,7 @@ def menu(update, context):
     )
     update.message.reply_text(text, parse_mode='Markdown')
 
-@restricted_group
+@restricted_group_and_topic
 def ma(update, context):
     if len(context.args) != 1:
         update.message.reply_text("❌ Format salah. Contoh: /ma BBCA")
@@ -455,7 +501,7 @@ def ma(update, context):
         logger.error(f"Error in /ma command: {e}")
         update.message.reply_text(f"❌ Error: {str(e)}")
 
-@restricted_group
+@restricted_group_and_topic
 def alert(update, context):
     if len(context.args) != 1:
         update.message.reply_text("❌ Format salah. Contoh: /alert BBCA")
@@ -553,7 +599,7 @@ def alert(update, context):
         logger.error(f"Error in /alert command: {e}")
         update.message.reply_text(f"❌ Error: {str(e)}")
 
-@restricted_group
+@restricted_group_and_topic
 def chart(update, context):
     try:
         if len(context.args) != 1:
@@ -837,7 +883,7 @@ def calculate_targets_stoploss(current_price, support, resistance, trend_type, e
 
     return float(tp1), float(tp2), float(stop_loss)
 
-@restricted_group
+@restricted_group_and_topic
 def analysis(update, context):
     if len(context.args) != 1:
         update.message.reply_text("❌ Format salah. Contoh: /analysis BBCA")
@@ -1178,7 +1224,7 @@ Pastikan konfirmasi dengan analisis fundamental dan kondisi market.
         logger.error(f"Error in /analysis command: {e}")
         update.message.reply_text(f"❌ Error dalam analisis: {str(e)}")
 
-@restricted_group
+@restricted_group_and_topic
 def faq(update, context):
     if check_cache("faq", "general"):
         update.message.reply_text("📚 FAQ sudah ditampilkan sebelumnya, scroll ke atas")
@@ -1227,7 +1273,7 @@ def main():
             logger.error("TELEGRAM_BOT_TOKEN environment variable is required!")
             sys.exit(1)
 
-        logger.info(f"Starting {BOT_USERNAME} for channel {ALLOWED_GROUP_ID}...")
+        logger.info(f"Starting {BOT_USERNAME} for channel {ALLOWED_GROUP_ID} and topic {ALLOWED_TOPIC_ID}...")
 
         # Create updater and dispatcher
         updater = Updater(TOKEN, use_context=True)
@@ -1255,7 +1301,7 @@ def main():
         # Untuk Railway - selalu gunakan polling (lebih reliable)
         updater.start_polling()
         logger.info("Polling mode started - Bot berjalan!")
-        logger.info("✅ Bot siap mengirim reminder untuk pesan non-command...")
+        logger.info(f"✅ Bot hanya aktif di topic ID: {ALLOWED_TOPIC_ID}")
 
         # Keep the bot running
         updater.idle()
