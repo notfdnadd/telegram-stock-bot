@@ -83,18 +83,7 @@ def send_access_denied_message(update):
 def send_wrong_topic_message(update):
     """Kirim pesan bahwa bot hanya bekerja di topic tertentu"""
     wrong_topic_message = (
-        "📌 *Panduan Penggunaan Bot*\n\n"
-        "Bot ini hanya aktif di **topic/thread khusus** untuk analisis saham.\n\n"
-        "🔍 **Silakan cari topic dengan nama:**\n"
-        "• \"Analisis Saham Bot\" atau\n"
-        "• \"Papi Tanya Saham Bot\"\n\n"
-        "Di topic tersebut, Anda bisa menggunakan command:\n"
-        "• `/ma BBCA` - Analisis Moving Average\n"
-        "• `/chart BBCA` - Chart teknikal\n"
-        "• `/analysis BBCA` - Analisis mendalam\n"
-        "• `/alert BBCA` - Sinyal trading\n"
-        "• `/faq` - Panduan istilah\n\n"
-        "📊 *papitanyasaham*"
+        "📌 HANYA GUNAKAN BOT PADA ROOM TOPIC \"BOT PAPI_TANYA_SAHAM\""
     )
     
     try:
