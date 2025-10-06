@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 # ==== KONFIGURASI BOT ====
 BOT_USERNAME = "papitanyasahambot"
-CHANNEL_NAME = "inicobacoba"
+CHANNEL_NAME = "BOT PAPI_TANYA_SAHAM"
 ALLOWED_GROUP_ID = "ALLOWED_GROUP_ID"  # Group ID yang diizinkan
 
 def debug(update, context):
@@ -55,11 +55,13 @@ def send_access_denied_message(update):
     """Kirim pesan denied yang profesional"""
     denied_message = (
         "🚫 *Akses Ditolak*\n\n"
-        "Bot ini khusus untuk channel **inicobacoba** saja.\n\n"
+        "Bot ini khusus untuk channel **Papi Tanya Saham** saja.\n\n"
         "✅ **Untuk mengakses bot ini:**\n"
-        "1. Pastikan Anda sudah bergabung dengan channel inicobacoba\n"
+        "1. Pastikan Anda sudah bergabung dengan channel **Papi Tanya Saham**\n"
         "2. Gunakan bot hanya dari dalam channel tersebut\n\n"
         "_Terima kasih atas pengertiannya_"
+        
+        "Hubungi @papitanyasaham jika ada pertanyaan."
     )
 
     try:
@@ -108,7 +110,7 @@ def send_reminder(update, context):
                 "• Setiap emiten hanya bisa dianalisis sekali per 10 menit\n"
                 "• Gunakan format command yang benar\n"
                 "• Hindari mengirim pesan teks biasa untuk menjaga kebersihan channel\n\n"
-                "📊 *papitanyasaham* - Analisis Saham Terpercaya"
+                "📊 papitanyasaham"
             )
 
             # Kirim reminder sebagai reply ke pesan user
@@ -1163,8 +1165,6 @@ def analysis(update, context):
 - {'Bias BUY dengan konfirmasi' if trend_type == 'bullish' else 'BIAS HINDARI - tunggu reversal' if trend_type == 'bearish' else 'Bias BUY di support, SELL di resistance'}
 
 ⚠️ DISCLAIMER KHUSUS UNTUK BEARISH:
-• Saham Indonesia TIDAK BISA SHORT
-• Profit HANYA dari kenaikan harga
 • Hindari catching falling knife
 • Tunggu konfirmasi reversal yang kuat
 
@@ -1200,7 +1200,6 @@ def faq(update, context):
         "• Bearish = Kondisi market turun\n"
         "• Sideways = Harga bergerak dalam range tertentu\n\n"
         "⚠️ PENTING UNTUK SAHAM INDONESIA:\n"
-        "- Hanya bisa profit dari kenaikan harga (tidak bisa short)\n"
         "- Hindari trading saat trend bearish kuat\n"
         "- Tunggu konfirmasi reversal untuk entry\n"
         "- Risk management adalah kunci utama\n\n"
