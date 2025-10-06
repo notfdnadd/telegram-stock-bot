@@ -83,7 +83,7 @@ def send_access_denied_message(update):
 def send_wrong_topic_message(update):
     """Kirim pesan bahwa bot hanya bekerja di topic tertentu"""
     wrong_topic_message = (
-        "📌 HANYA GUNAKAN BOT PADA ROOM TOPIC \"BOT PAPI_TANYA_SAHAM\""
+        "📌 HANYA GUNAKAN BOT PADA ROOM TOPIC \"BOT PAPI TANYA SAHAM\""
     )
     
     try:
