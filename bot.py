@@ -1167,7 +1167,7 @@ def analysis(update, context):
 • TP1: Rp {tp1:,.0f} (+{((tp1-current_price)/current_price*100):.1f}%)
 • TP2: Rp {tp2:,.0f} (+{((tp2-current_price)/current_price*100):.1f}%)
 • Stop Loss: Rp {stop_loss:,.0f} (-{((current_price-stop_loss)/current_price*100):.1f}%)
-• Risk/Reward: {rr_text}
+• Reward/Risk: {rr_text}
 
 📈 INDIKATOR TEKNIKAL:
 • RSI: {rsi:.1f} ({rsi_signal})
