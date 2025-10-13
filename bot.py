@@ -628,7 +628,40 @@ def chart(update, context):
         data["MA9"] = data["Close"].rolling(9).mean()
         data["MA20"] = data["Close"].rolling(20).mean()
         data["MA50"] = data["Close"].rolling(50).mean()
+        
+        # Calculate RSI with proper validation
         data["RSI"] = calculate_rsi(data)
+        
+        # Handle RSI calculation issues - ensure we have valid RSI data
+        rsi_valid = False
+        if 'RSI' in data.columns and not data['RSI'].isna().all():
+            # Remove NaN values from RSI and ensure we have enough data
+            rsi_clean = data['RSI'].dropna()
+            if len(rsi_clean) > 0:
+                rsi_valid = True
+                # Fill any remaining NaN with the last valid value
+                data['RSI'] = data['RSI'].fillna(method='ffill').fillna(method='bfill')
+                logger.info(f"RSI data valid for {kode}")
+
+        if not rsi_valid:
+            logger.warning(f"RSI calculation failed for {kode}, using fallback calculation")
+            # Fallback RSI calculation
+            try:
+                delta = data['Close'].diff()
+                gain = (delta.where(delta > 0, 0)).fillna(0)
+                loss = (-delta.where(delta < 0, 0)).fillna(0)
+                
+                avg_gain = gain.rolling(window=14, min_periods=1).mean()
+                avg_loss = loss.rolling(window=14, min_periods=1).mean()
+                
+                rs = avg_gain / avg_loss
+                data['RSI'] = 100 - (100 / (1 + rs))
+                rsi_valid = True
+                logger.info(f"Fallback RSI calculation successful for {kode}")
+                
+            except Exception as rsi_error:
+                logger.error(f"Fallback RSI also failed for {kode}: {rsi_error}")
+                rsi_valid = False
 
         # Calculate MACD
         exp1 = data['Close'].ewm(span=12).mean()
@@ -692,20 +725,47 @@ def chart(update, context):
         # Gunakan improved support resistance untuk chart
         support_levels, resistance_levels = find_chart_support_resistance(data, current_price, 60)
 
-        # Create subplots
+        # ===== CREATE SUBPLOTS WITH PROPER STRUCTURE =====
         apds = [
+            # Main chart: Moving Averages
             mpf.make_addplot(data["MA9"], color='orange', width=0.7, label='MA9'),
             mpf.make_addplot(data["MA20"], color='blue', width=0.7, label='MA20'),
             mpf.make_addplot(data["MA50"], color='red', width=0.7, label='MA50'),
-            mpf.make_addplot(data["RSI"], panel=1, color='purple', width=0.7, label='RSI'),
-            mpf.make_addplot([70] * len(data), panel=1, color='red', linestyle='--', width=0.5),
-            mpf.make_addplot([30] * len(data), panel=1, color='green', linestyle='--', width=0.5),
-            mpf.make_addplot(macd, panel=2, color='blue', width=0.7, label='MACD'),
-            mpf.make_addplot(signal, panel=2, color='red', width=0.7, label='SIGNAL'),
-            mpf.make_addplot(histogram, type='bar', panel=2, color='gray', alpha=0.3, width=0.7)
         ]
 
-        # Create the plot
+        # ===== FIXED MACD COLORS =====
+        # Create custom colors for MACD histogram
+        macd_colors = []
+        for val in histogram:
+            if pd.isna(val):
+                macd_colors.append('gray')
+            elif val >= 0:
+                macd_colors.append('#90EE90')  # Soft green for positive
+            else:
+                macd_colors.append('#FFB6C1')  # Soft red for negative
+
+        # Add MACD plots (always include MACD)
+        apds.extend([
+            mpf.make_addplot(macd, panel=2, color='blue', width=1.0),
+            mpf.make_addplot(signal, panel=2, color='red', width=1.0),
+            mpf.make_addplot(histogram, type='bar', panel=2, color=macd_colors, alpha=0.7, width=0.8, ylabel='MACD')
+        ])
+
+        # Add RSI if valid
+        if rsi_valid:
+            apds.extend([
+                mpf.make_addplot(data["RSI"], panel=1, color='purple', width=1.0, label='RSI 14'),
+                mpf.make_addplot([70] * len(data), panel=1, color='red', linestyle='--', width=0.7, alpha=0.7),
+                mpf.make_addplot([30] * len(data), panel=1, color='green', linestyle='--', width=0.7, alpha=0.7)
+            ])
+            panel_ratios = (3, 1, 1)  # Main, RSI, MACD
+            panel_labels = ['Price', 'RSI 14', 'MACD']  # Proper Y-axis labels
+        else:
+            panel_ratios = (4, 1)  # Main, MACD only
+            panel_labels = ['Price', 'MACD']
+
+        # ===== FIXED: ADD PROPER MARGINS BETWEEN PANELS =====
+        # Create the plot with improved panel configuration and margins
         fig, axlist = mpf.plot(
             data,
             type="candle",
@@ -714,13 +774,67 @@ def chart(update, context):
             volume=True,
             returnfig=True,
             figsize=(12, 10),
-            panel_ratios=(3,1,1),
-            tight_layout=True
+            panel_ratios=panel_ratios,
+            tight_layout=True,
+            volume_panel=0,  # Volume in the main panel
+            volume_alpha=0.3,
+            fill_between=dict(
+                y1=data['RSI'].values if rsi_valid else [50]*len(data),
+                y2=70,
+                alpha=0.1,
+                color='red',
+                panel=1 if rsi_valid else None
+            ) if rsi_valid else None
         )
 
-        ax_main = axlist[0]
-        ax_rsi = axlist[2]
-        ax_macd = axlist[3]
+        # ===== IMPROVED: ADD MARGINS BETWEEN PANELS =====
+        # Adjust subplot parameters to add space between panels
+        plt.subplots_adjust(
+            left=0.08,      # Left margin
+            right=0.95,     # Right margin  
+            bottom=0.08,    # Bottom margin
+            top=0.92,       # Top margin
+            hspace=0.3,     # Horizontal space between panels - INCREASED for better spacing
+            wspace=0.2      # Vertical space between panels
+        )
+
+        # ===== PROPER AXIS ASSIGNMENT AND LABELING =====
+        if rsi_valid:
+            # With RSI: axlist[0]=main, axlist[1]=volume, axlist[2]=RSI, axlist[3]=MACD
+            ax_main = axlist[0]
+            ax_volume = axlist[1]
+            ax_rsi = axlist[2]
+            ax_macd = axlist[3]
+            
+            # Set RSI Y-axis label with proper positioning
+            ax_rsi.set_ylabel('RSI 14', fontweight='bold', fontsize=10)
+            ax_rsi.legend(loc='upper left', fontsize=8)
+            ax_rsi.set_ylim(0, 100)
+            ax_rsi.axhline(70, color='red', linestyle='--', alpha=0.7, linewidth=1)
+            ax_rsi.axhline(30, color='green', linestyle='--', alpha=0.7, linewidth=1)
+            ax_rsi.axhline(50, color='gray', linestyle='-', alpha=0.5, linewidth=0.5)
+            
+            # Add extra margin for RSI panel
+            ax_rsi.margins(y=0.1)  # 10% margin on top and bottom
+            
+        else:
+            # Without RSI: axlist[0]=main, axlist[1]=volume, axlist[2]=MACD
+            ax_main = axlist[0]
+            ax_volume = axlist[1]
+            ax_macd = axlist[2]
+
+        # Set MACD Y-axis label and styling with proper margins
+        ax_macd.set_ylabel('MACD 12,26', fontweight='bold', fontsize=10)
+        ax_macd.legend(loc='upper left', fontsize=8)
+        ax_macd.axhline(0, color='black', linestyle='-', alpha=0.5, linewidth=0.5)
+        ax_macd.margins(y=0.15)  # Add margin to MACD panel
+
+        # Set Volume Y-axis label with improved positioning
+        ax_volume.set_ylabel('Volume', fontweight='bold', fontsize=10)
+        ax_volume.margins(y=0.1)  # Add margin to volume area
+
+        # Add margin to main chart area
+        ax_main.margins(y=0.05)
 
         # Plot support levels dengan warna dan annotation yang berbeda
         colors_support = ['green', 'lime']
@@ -751,26 +865,29 @@ def chart(update, context):
                 )
 
         # Tambahkan watermark di chart
-        ax_main.set_title(f'Chart {kode} - {datetime.now().strftime("%Y-%m-%d")} | papitanyasaham',
+        ax_main.set_title(f'Chart {kode} - {datetime.now().strftime("%Y-%m-%d")} | PAPI TANYA SAHAM',
                          fontsize=14, fontweight='bold')
-        ax_main.legend()
+        ax_main.legend(loc='upper left', fontsize=8)
 
-        ax_rsi.set_ylabel('RSI')
-        ax_rsi.legend()
-
-        ax_macd.set_ylabel('MACD')
-        ax_macd.legend()
-
-        # Save and send
+        # Save and send with higher DPI and better compression
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=100, bbox_inches="tight")
+        fig.savefig(buf, format="png", dpi=120, bbox_inches="tight", 
+                   pad_inches=0.5, facecolor='white', edgecolor='none')
         buf.seek(0)
 
         price_text = f"Rp {current_price:,.2f}" if current_price else "N/A"
+        
+        # Adjust caption based on whether RSI is displayed
+        if rsi_valid:
+            chart_components = "Candle + MA + RSI + MACD"
+            indicators_info = "RSI 14 | MACD"
+        else:
+            chart_components = "Candle + MA + MACD"
+            indicators_info = "MACD - RSI tidak tersedia"
 
         caption = add_watermark(
             f"📊 Chart {kode}\n💰 Harga: {price_text}\n📈 Periode: 6 Bulan\n\n"
-            f"Candle + MA + RSI + MACD\nS: Support | R: Resistance"
+            f"{chart_components}\n{indicators_info}\nS: Support | R: Resistance\n"
         )
 
         update.message.reply_photo(
@@ -781,6 +898,7 @@ def chart(update, context):
 
     except Exception as e:
         logger.error(f"Error in /chart command: {e}")
+        logger.error(traceback.format_exc())
         update.message.reply_text(f"❌ Error membuat chart: {str(e)}")
 
 # ==== REVISED ENTRY POINT CALCULATION ====
