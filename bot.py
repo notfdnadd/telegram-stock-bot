@@ -777,8 +777,7 @@ def chart(update, context):
             panel_ratios=panel_ratios,
             tight_layout=True,
             volume_panel=0,  # Volume in the main panel
-            volume_alpha=0.3,
-            fill_between=None
+            volume_alpha=0.3
         )
 
         # ===== IMPROVED: ADD MARGINS BETWEEN PANELS =====
