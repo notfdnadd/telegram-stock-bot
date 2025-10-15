@@ -778,13 +778,7 @@ def chart(update, context):
             tight_layout=True,
             volume_panel=0,  # Volume in the main panel
             volume_alpha=0.3,
-            fill_between=dict(
-                y1=data['RSI'].values if rsi_valid else [50]*len(data),
-                y2=70,
-                alpha=0.1,
-                color='red',
-                panel=1 if rsi_valid else None
-            ) if rsi_valid else None
+            fill_between=None
         )
 
         # ===== IMPROVED: ADD MARGINS BETWEEN PANELS =====
